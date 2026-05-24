@@ -1,0 +1,85 @@
+@baseUrl = http://127.0.0.1:4000
+@mcpUrl = {{baseUrl}}/mcp
+@auth = Bearer [put here the token]
+
+### health
+GET {{baseUrl}}/api/health
+
+### mcp initialize
+POST {{mcpUrl}}
+Authorization: {{auth}}
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "mcp-test-http",
+      "version": "1.0.0"
+    }
+  }
+}
+
+### mcp notifications/initialized
+POST {{mcpUrl}}
+Authorization: {{auth}}
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/initialized",
+  "params": {}
+}
+
+### mcp tools/list
+POST {{mcpUrl}}
+Authorization: {{auth}}
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/list",
+  "params": {}
+}
+
+### mcp tools/call list_projects
+POST {{mcpUrl}}
+Authorization: {{auth}}
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "list_projects",
+    "arguments": {}
+  }
+}
+
+### mcp tools/call search_files
+POST {{mcpUrl}}
+Authorization: {{auth}}
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "search_files",
+    "arguments": {
+      "query": "README"
+    }
+  }
+}

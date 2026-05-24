@@ -1,0 +1,210 @@
+.markdown-editor {
+  --markdown-content-width: 760px;
+  --markdown-side-gutter: 56px;
+
+  width: min(100%, calc(var(--markdown-content-width) + var(--markdown-side-gutter) * 2));
+  max-width: calc(var(--markdown-content-width) + var(--markdown-side-gutter) * 2);
+  margin-inline: auto;
+  overflow: visible;
+}
+
+.markdown-editor .devsync-crepe-editor,
+.markdown-editor .milkdown {
+  overflow: visible;
+}
+
+.markdown-editor .devsync-crepe-editor {
+  position: relative;
+}
+
+.markdown-editor .milkdown-slash-menu {
+  display: none !important;
+}
+
+.markdown-editor .milkdown {
+  --crepe-color-background: transparent;
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-surface: var(--muted);
+  --crepe-color-surface-low: color-mix(in oklab, var(--muted) 82%, var(--background));
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-outline: var(--border);
+  --crepe-color-primary: var(--primary);
+  --crepe-color-secondary: var(--secondary);
+  --crepe-color-on-secondary: var(--secondary-foreground);
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--background);
+  --crepe-color-inline-code: var(--foreground);
+  --crepe-color-error: var(--destructive);
+  --crepe-color-hover: var(--accent);
+  --crepe-color-selected: color-mix(in oklab, var(--primary) 20%, transparent);
+  --crepe-color-inline-area: var(--muted);
+  --crepe-font-title: "Inter Variable", sans-serif;
+  --crepe-font-default: "Inter Variable", sans-serif;
+  --crepe-font-code: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --crepe-shadow-1: 0 8px 24px color-mix(in oklab, var(--foreground) 14%, transparent);
+  --crepe-shadow-2: 0 12px 32px color-mix(in oklab, var(--foreground) 18%, transparent);
+
+  background: transparent;
+  color: var(--foreground);
+}
+
+.markdown-editor .ProseMirror {
+  min-height: 52vh;
+  padding: 0 var(--markdown-side-gutter) 1rem;
+  font-size: 0.875rem;
+  line-height: 1.75rem;
+  outline: none;
+}
+
+.markdown-editor .devsync-crepe-editor--tall .ProseMirror {
+  min-height: 60vh;
+}
+
+.markdown-editor .ProseMirror > * + * {
+  margin-top: 0.75rem;
+}
+
+.markdown-editor .ProseMirror h1 {
+  font-size: 1.5rem;
+  font-weight: 650;
+  line-height: 2rem;
+}
+
+.markdown-editor .ProseMirror h2 {
+  font-size: 1.25rem;
+  font-weight: 650;
+  line-height: 1.75rem;
+}
+
+.markdown-editor .ProseMirror h3 {
+  font-size: 1.05rem;
+  font-weight: 650;
+  line-height: 1.6rem;
+}
+
+.markdown-editor .ProseMirror p {
+  font-size: 0.875rem;
+  line-height: 1.75rem;
+  padding: 0;
+}
+
+.markdown-editor .ProseMirror ul,
+.markdown-editor .ProseMirror ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-editor .ProseMirror li::marker {
+  color: color-mix(in oklab, var(--foreground) 72%, transparent);
+  font-weight: 700;
+}
+
+.markdown-editor .ProseMirror ul {
+  list-style: disc;
+}
+
+.markdown-editor .ProseMirror ol {
+  list-style: decimal;
+}
+
+.markdown-editor .ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+  padding-left: 0.875rem;
+}
+
+.markdown-editor .ProseMirror blockquote::before {
+  display: none;
+}
+
+.markdown-editor .ProseMirror hr {
+  border: 0;
+  border-top: 1px solid color-mix(in oklab, var(--foreground) 28%, transparent);
+  margin: 1.5rem 0;
+}
+
+.dark .markdown-editor .ProseMirror hr {
+  border-top-color: color-mix(in oklab, var(--foreground) 42%, transparent);
+}
+
+.markdown-editor .ProseMirror a[href] {
+  cursor: pointer;
+}
+
+.markdown-editor .ProseMirror code {
+  background: var(--muted);
+  border-radius: 0.25rem;
+  color: var(--foreground);
+  display: inline;
+  font-size: 0.875em;
+  padding: 0.1rem 0.25rem;
+}
+
+.markdown-editor .ProseMirror pre,
+.markdown-editor .milkdown-code-block,
+.markdown-editor .milkdown-code-block .cm-editor,
+.markdown-editor .milkdown-code-block .cm-gutters {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.markdown-editor .ProseMirror pre {
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  padding: 0.875rem;
+}
+
+.markdown-editor .ProseMirror pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-editor .milkdown-code-block {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.markdown-editor .milkdown-code-block .cm-content,
+.markdown-editor .milkdown-code-block .cm-line {
+  color: var(--foreground);
+}
+
+.markdown-editor .milkdown-code-block .cm-gutters {
+  border-right: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.markdown-editor .milkdown-code-block .cm-activeLine,
+.markdown-editor .milkdown-code-block .cm-activeLineGutter {
+  background: color-mix(in oklab, var(--background) 55%, transparent);
+}
+
+.markdown-editor .milkdown-code-block .cm-selectionBackground {
+  background: color-mix(in oklab, var(--primary) 24%, transparent);
+}
+
+.markdown-editor .milkdown-block-handle {
+  z-index: 20;
+}
+
+.markdown-editor .markdown-source-editor {
+  box-sizing: border-box;
+  padding-inline: var(--markdown-side-gutter);
+}
+
+.markdown-editor--fill {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.markdown-editor--fill .markdown-source-editor {
+  min-height: 100%;
+}
+
+@media (max-width: 768px) {
+  .markdown-editor {
+    --markdown-side-gutter: 1rem;
+  }
+}

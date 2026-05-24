@@ -1,0 +1,341 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.809 0.105 251.813);
+    --chart-2: oklch(0.623 0.214 259.815);
+    --chart-3: oklch(0.546 0.245 262.881);
+    --chart-4: oklch(0.488 0.243 264.376);
+    --chart-5: oklch(0.424 0.199 265.638);
+    --radius: 0.625rem;
+    --sidebar-inset: oklch(0.985 0 0);
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+    --background: oklch(0.26 0.01 293.32);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.22 0.01 294.76);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.809 0.105 251.813);
+    --chart-2: oklch(0.623 0.214 259.815);
+    --chart-3: oklch(0.546 0.245 262.881);
+    --chart-4: oklch(0.488 0.243 264.376);
+    --chart-5: oklch(0.424 0.199 265.638);
+    --sidebar-inset: oklch(0.23 0.01 294.77);
+    --sidebar: oklch(0.23 0.01 294.77);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+    --font-sans: 'Inter Variable', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 28%, transparent) transparent;
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--foreground) 24%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--foreground) 34%, transparent);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  body {
+    @apply bg-background text-foreground overscroll-none;
+  }
+
+  html {
+    @apply font-sans;
+  }
+}
+
+@layer components {
+  .devsync-gantt-shell > .wx-theme,
+  .devsync-gantt .wx-gantt,
+  .devsync-gantt .wx-layout,
+  .devsync-gantt .wx-table-container,
+  .devsync-gantt .wx-chart {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .devsync-gantt--chart-only .wx-table-container {
+    display: none !important;
+  }
+
+  .devsync-gantt--chart-only .wx-layout > .wx-resizer {
+    display: none !important;
+  }
+
+  .devsync-gantt--chart-only .wx-layout > .wx-content {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  .devsync-gantt--chart-only .wx-chart {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+  }
+
+  .devsync-gantt .wx-chart {
+    overflow-x: scroll !important;
+    scrollbar-gutter: stable;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 42%, transparent)
+      color-mix(in oklab, var(--muted) 72%, transparent);
+    scrollbar-width: auto;
+  }
+
+  .devsync-gantt .wx-chart::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+  }
+
+  .devsync-gantt .wx-chart::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--muted) 72%, transparent);
+  }
+
+  .devsync-gantt .wx-chart::-webkit-scrollbar-thumb {
+    min-width: 72px;
+    background: color-mix(in oklab, var(--foreground) 44%, transparent);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  .devsync-gantt .wx-chart::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--foreground) 56%, transparent);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  .devsync-gantt .wx-table-container {
+    min-width: 0;
+    overflow-x: hidden !important;
+  }
+
+  .devsync-gantt .wx-table,
+  .devsync-gantt .wx-grid,
+  .devsync-gantt .wx-table-box {
+    max-width: 100%;
+    min-width: 0;
+    width: 100% !important;
+  }
+
+  .devsync-gantt--pan-ready .wx-chart {
+    cursor: grab;
+  }
+
+  .devsync-gantt--panning .wx-chart,
+  .devsync-gantt--panning .wx-chart * {
+    cursor: grabbing !important;
+  }
+
+  .devsync-gantt i[class*="wxi-"],
+  .wx-gantt-editor i[class*="wxi-"],
+  .wx-popup i[class*="wxi-"],
+  .wx-dropdown i[class*="wxi-"] {
+    display: inline-flex;
+    width: var(--wx-icon-size, 20px);
+    min-width: var(--wx-icon-size, 20px);
+    height: var(--wx-icon-size, 20px);
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+    font-style: normal;
+    line-height: 1;
+  }
+
+  .devsync-gantt i[class*="wxi-"]::before,
+  .wx-gantt-editor i[class*="wxi-"]::before,
+  .wx-popup i[class*="wxi-"]::before,
+  .wx-dropdown i[class*="wxi-"]::before {
+    display: block;
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-plus::before {
+    content: "+";
+    font-weight: 700;
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-close::before {
+    content: "\00d7";
+    font-weight: 700;
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-delete::before {
+    content: "Del";
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-edit::before {
+    content: "\270e";
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-check::before,
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-save::before,
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-content-save::before {
+    content: "\2713";
+    font-weight: 700;
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-calendar::before {
+    content: "\25a1";
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-angle-down::before {
+    content: "\203a";
+    transform: rotate(90deg);
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-angle-up::before {
+    content: "\203a";
+    transform: rotate(-90deg);
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-angle-left::before {
+    content: "\2039";
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-angle-right::before {
+    content: "\203a";
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-menu-left::before {
+    content: "\2039";
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-menu-right::before {
+    content: "\203a";
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-menu-down::before {
+    content: "\203a";
+    transform: rotate(90deg);
+  }
+
+  :where(.devsync-gantt, .wx-gantt-editor, .wx-popup, .wx-dropdown) .wxi-dots-h::before {
+    content: "...";
+    font-weight: 700;
+  }
+
+  .devsync-gantt .wx-weekend {
+    background-color: color-mix(in oklab, var(--muted) 64%, transparent) !important;
+  }
+
+}

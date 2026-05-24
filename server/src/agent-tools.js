@@ -1,0 +1,458 @@
+import { createHash, createHmac } from "node:crypto"
+import fs from "node:fs/promises"
+import path from "node:path"
+
+import { tool } from "langchain"
+import { z } from "zod"
+
+import {
+  addLog,
+  createPlanItem,
+  dataDir,
+  deletePlanItem,
+  listPlanItems,
+  readPlanItem,
+  slugify,
+  togglePlanItem,
+  updatePlanItem,
+} from "./storage.js"
+import { appendSystemLogEvent } from "./system-log.js"
+
+const ACTIVITY_INLINE_MAX_CHARS = Number(process.env.DEVSYNC_ACTIVITY_INLINE_MAX_CHARS ?? 800)
+
+function envFirst(names) {
+  for (const name of names) {
+    const value = process.env[name]?.trim()
+    if (value) {
+      return value
+    }
+  }
+
+  return ""
+}
+
+function hmac(key, value, encoding) {
+  return createHmac("sha256", key).update(value, "utf8").digest(encoding)
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+function amzDate(date = new Date()) {
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, "")
+}
+
+function canonicalHeaderValue(value) {
+  return String(value).trim().replace(/\s+/g, " ")
+}
+
+function signingKey(secretAccessKey, dateStamp, region, service) {
+  const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp)
+  const kRegion = hmac(kDate, region)
+  const kService = hmac(kRegion, service)
+  return hmac(kService, "aws4_request")
+}
+
+function sesConfig() {
+  const region = envFirst(["DEVSYNC_SES_REGION", "AWS_REGION", "AWS_DEFAULT_REGION"])
+  const accessKeyId = envFirst(["DEVSYNC_SES_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"])
+  const secretAccessKey = envFirst(["DEVSYNC_SES_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"])
+  const sessionToken = envFirst(["DEVSYNC_SES_SESSION_TOKEN", "AWS_SESSION_TOKEN"])
+  const fromEmail = envFirst(["DEVSYNC_SES_FROM_EMAIL", "AWS_SES_FROM_EMAIL", "SES_FROM_EMAIL"])
+  const configurationSetName = envFirst(["DEVSYNC_SES_CONFIGURATION_SET", "AWS_SES_CONFIGURATION_SET"])
+
+  if (!region || !accessKeyId || !secretAccessKey || !fromEmail) {
+    throw new Error("send_email_ses requires DEVSYNC_SES_REGION, DEVSYNC_SES_ACCESS_KEY_ID, DEVSYNC_SES_SECRET_ACCESS_KEY and DEVSYNC_SES_FROM_EMAIL.")
+  }
+
+  return { accessKeyId, configurationSetName, fromEmail, region, secretAccessKey, sessionToken }
+}
+
+async function sendSesEmail(input) {
+  const config = sesConfig()
+  const host = `email.${config.region}.amazonaws.com`
+  const pathName = "/v2/email/outbound-emails"
+  const endpoint = `https://${host}${pathName}`
+  const now = amzDate()
+  const dateStamp = now.slice(0, 8)
+  const payload = JSON.stringify({
+    FromEmailAddress: config.fromEmail,
+    Destination: {
+      ToAddresses: input.to,
+      CcAddresses: input.cc ?? [],
+      BccAddresses: input.bcc ?? [],
+    },
+    ReplyToAddresses: input.replyTo ?? [],
+    Content: {
+      Simple: {
+        Subject: { Data: input.subject, Charset: "UTF-8" },
+        Body: {
+          ...(input.text ? { Text: { Data: input.text, Charset: "UTF-8" } } : {}),
+          ...(input.html ? { Html: { Data: input.html, Charset: "UTF-8" } } : {}),
+        },
+      },
+    },
+    ...(config.configurationSetName ? { ConfigurationSetName: config.configurationSetName } : {}),
+  })
+  const payloadHash = sha256(payload)
+  const headers = {
+    "content-type": "application/json",
+    host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": now,
+    ...(config.sessionToken ? { "x-amz-security-token": config.sessionToken } : {}),
+  }
+  const signedHeaders = Object.keys(headers).sort().join(";")
+  const canonicalHeaders = Object.keys(headers)
+    .sort()
+    .map((key) => `${key}:${canonicalHeaderValue(headers[key])}\n`)
+    .join("")
+  const canonicalRequest = [
+    "POST",
+    pathName,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n")
+  const credentialScope = `${dateStamp}/${config.region}/ses/aws4_request`
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    now,
+    credentialScope,
+    sha256(canonicalRequest),
+  ].join("\n")
+  const signature = hmac(signingKey(config.secretAccessKey, dateStamp, config.region, "ses"), stringToSign, "hex")
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      ...headers,
+      Authorization: `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    },
+    body: payload,
+  })
+  const body = await response.text()
+
+  if (!response.ok) {
+    throw new Error(`AWS SES send failed: ${response.status} ${body}`)
+  }
+
+  const parsed = body ? JSON.parse(body) : {}
+  return {
+    messageId: parsed.MessageId ?? null,
+    status: "sent",
+  }
+}
+
+function safeGeneratedPath(projectId, wantedPath) {
+  const fileName = path.basename(String(wantedPath || "generated.md"))
+  const cleanName = slugify(fileName.replace(/\.md$/i, "")) + ".md"
+  const root = path.join(dataDir, projectId, "generated")
+  const target = path.resolve(root, cleanName)
+  const relative = path.relative(root, target)
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw Object.assign(new Error("Invalid generated file path"), { statusCode: 400 })
+  }
+
+  return { root, target, relative: `generated/${cleanName}` }
+}
+
+async function uniqueGeneratedPath(projectId, wantedPath) {
+  const initial = safeGeneratedPath(projectId, wantedPath)
+  const parsed = path.parse(initial.target)
+  let target = initial.target
+  let relative = initial.relative
+  let index = 1
+
+  while (true) {
+    try {
+      await fs.access(target)
+      const fileName = `${parsed.name}-${index}${parsed.ext}`
+      target = path.join(parsed.dir, fileName)
+      relative = `generated/${fileName}`
+      index += 1
+    } catch {
+      return { root: initial.root, target, relative }
+    }
+  }
+}
+
+function cleanVirtualPath(value) {
+  return String(value ?? "").trim().replace(/^\/+/, "").replace(/^\.?\//, "")
+}
+
+function canWritePath(scope, targetPath) {
+  const target = cleanVirtualPath(targetPath)
+
+  return (scope.write ?? []).some((item) => {
+    const pattern = cleanVirtualPath(item)
+    if (!pattern) return false
+    if (pattern === "**" || pattern === "**/*") return true
+    if (pattern.endsWith("/**")) {
+      const base = pattern.slice(0, -3)
+      return target === base || target.startsWith(`${base}/`)
+    }
+    if (pattern.endsWith("/*")) {
+      const base = pattern.slice(0, -2)
+      const rest = target.startsWith(`${base}/`) ? target.slice(base.length + 1) : ""
+      return Boolean(rest && !rest.includes("/"))
+    }
+    return target === pattern || target.startsWith(`${pattern}/`)
+  })
+}
+
+function assertWritePath(scope, operation, targetPath) {
+  if (!scope.projectId) {
+    throw new Error(`${operation} requires a project scope.`)
+  }
+
+  if (!canWritePath(scope, targetPath)) {
+    throw new Error(`${operation} requires write permission for ${targetPath}.`)
+  }
+}
+
+function createSaveGeneratedMarkdownTool(scope) {
+  return tool(
+    async ({ fileName, title, content }) => {
+      if (!scope.projectId) {
+        throw new Error("save_generated_markdown requires a project scope.")
+      }
+
+      const { root, target, relative } = await uniqueGeneratedPath(scope.projectId, fileName || title)
+      assertWritePath(scope, "save_generated_markdown", relative)
+      await fs.mkdir(root, { recursive: true })
+      await fs.writeFile(target, `${String(content).trim()}\n`, "utf8")
+      await appendSystemLogEvent({
+        action: "generated_markdown.saved",
+        source: "agent-tool",
+        actor: "agent",
+        projectId: scope.projectId,
+        target: relative,
+        summary: `Saved generated markdown ${path.basename(relative)}`,
+      })
+
+      return {
+        path: relative,
+        message: "Generated markdown saved.",
+      }
+    },
+    {
+      name: "save_generated_markdown",
+      description: "Save a generated Markdown file under the current project's generated/ folder.",
+      schema: z.object({
+        fileName: z.string().min(1).describe("Markdown file name, without directories."),
+        title: z.string().optional().describe("Short title for the generated file."),
+        content: z.string().min(1).describe("Full Markdown content to save."),
+      }),
+    }
+  )
+}
+
+function createAppendActivityLogTool(scope) {
+  return tool(
+    async ({ content, author }) => {
+      const text = String(content ?? "")
+      assertWritePath(scope, "append_activity_log", "logs/activity/000001.md")
+
+      if (text.trim().length > ACTIVITY_INLINE_MAX_CHARS) {
+        assertWritePath(scope, "append_activity_log", "artifacts/activity-log.md")
+      }
+
+      return addLog(scope.projectId, {
+        author: author || "agent",
+        content,
+      })
+    },
+    {
+      name: "append_activity_log",
+      description: "Append a short entry to the current project's activity log.",
+      schema: z.object({
+        content: z.string().min(1).describe("Short activity log entry."),
+        author: z.string().optional().describe("Author label. Defaults to agent."),
+      }),
+    }
+  )
+}
+
+function canWritePlan(scope, options = {}) {
+  return (scope.write ?? []).some((item) => {
+    const clean = cleanVirtualPath(item)
+    return ["**", "**/*", "plan", "plan/**", "plan/*"].includes(clean)
+      || (!options.files && clean === "plan/README.md")
+  })
+}
+
+function assertPlanScope(scope, operation) {
+  if (!scope.projectId) {
+    throw new Error(`${operation} requires a project scope.`)
+  }
+}
+
+function assertPlanWrite(scope, operation) {
+  assertPlanScope(scope, operation)
+
+  if (!canWritePlan(scope, { files: true })) {
+    throw new Error(`${operation} requires write permission for plan/**.`)
+  }
+}
+
+function assertPlanIndexWrite(scope, operation) {
+  assertPlanScope(scope, operation)
+
+  if (!canWritePlan(scope)) {
+    throw new Error(`${operation} requires write permission for plan/README.md or plan/**.`)
+  }
+}
+
+function createListPlanItemsTool(scope) {
+  return tool(
+    async () => {
+      assertPlanScope(scope, "list_plan_items")
+      return listPlanItems(scope.projectId)
+    },
+    {
+      name: "list_plan_items",
+      description: "List high-level project plan items.",
+      schema: z.object({}),
+    }
+  )
+}
+
+function createReadPlanItemTool(scope) {
+  return tool(
+    async ({ path: itemPath }) => {
+      assertPlanScope(scope, "read_plan_item")
+      return readPlanItem(scope.projectId, itemPath)
+    },
+    {
+      name: "read_plan_item",
+      description: "Read a project plan item from plan/.",
+      schema: z.object({
+        path: z.string().min(1).describe("Project-relative plan item path."),
+      }),
+    }
+  )
+}
+
+function createCreatePlanItemTool(scope) {
+  return tool(
+    async ({ title, owner, deadline, body, createdBy }) => {
+      assertPlanWrite(scope, "create_plan_item")
+      return createPlanItem(scope.projectId, { title, owner, deadline, body, createdBy: createdBy || "agent" })
+    },
+    {
+      name: "create_plan_item",
+      description: "Create a high-level project plan item in plan/.",
+      schema: z.object({
+        title: z.string().min(1).describe("Plan item title."),
+        owner: z.string().optional().describe("Optional owner label."),
+        deadline: z.string().optional().describe("Optional deadline as YYYY-MM-DD."),
+        body: z.string().optional().describe("Optional Markdown body."),
+        createdBy: z.string().optional().describe("Creator label. Defaults to agent."),
+      }),
+    }
+  )
+}
+
+function createUpdatePlanItemTool(scope) {
+  return tool(
+    async ({ path: itemPath, title, owner, deadline, body, content }) => {
+      assertPlanWrite(scope, "update_plan_item")
+      return updatePlanItem(scope.projectId, itemPath, { title, owner, deadline, body, content })
+    },
+    {
+      name: "update_plan_item",
+      description: "Update a project plan item in plan/.",
+      schema: z.object({
+        path: z.string().min(1).describe("Project-relative plan item path."),
+        title: z.string().optional().describe("New title."),
+        owner: z.string().optional().describe("New owner label."),
+        deadline: z.string().optional().describe("New deadline as YYYY-MM-DD."),
+        body: z.string().optional().describe("New Markdown body."),
+        content: z.string().optional().describe("Full Markdown content."),
+      }),
+    }
+  )
+}
+
+function createTogglePlanItemTool(scope) {
+  return tool(
+    async ({ path: itemPath, done }) => {
+      assertPlanIndexWrite(scope, "toggle_plan_item")
+      return togglePlanItem(scope.projectId, itemPath, done)
+    },
+    {
+      name: "toggle_plan_item",
+      description: "Toggle or set a plan item checkbox in plan/README.md only.",
+      schema: z.object({
+        path: z.string().min(1).describe("Project-relative plan item path."),
+        done: z.boolean().optional().describe("Optional explicit checkbox value."),
+      }),
+    }
+  )
+}
+
+function createDeletePlanItemTool(scope) {
+  return tool(
+    async ({ path: itemPath }) => {
+      assertPlanWrite(scope, "delete_plan_item")
+      return deletePlanItem(scope.projectId, itemPath)
+    },
+    {
+      name: "delete_plan_item",
+      description: "Delete a project plan item from plan/.",
+      schema: z.object({
+        path: z.string().min(1).describe("Project-relative plan item path."),
+      }),
+    }
+  )
+}
+
+function createSendSesEmailTool() {
+  return tool(
+    async ({ to, cc, bcc, replyTo, subject, text, html }) => {
+      if (!text && !html) {
+        throw new Error("send_email_ses requires text or html body.")
+      }
+
+      return sendSesEmail({ to, cc, bcc, replyTo, subject, text, html })
+    },
+    {
+      name: "send_email_ses",
+      description: "Send an email through AWS SES using Devsync server environment credentials.",
+      schema: z.object({
+        to: z.array(z.string().email()).min(1).describe("Recipient email addresses."),
+        cc: z.array(z.string().email()).optional().describe("CC recipient email addresses."),
+        bcc: z.array(z.string().email()).optional().describe("BCC recipient email addresses."),
+        replyTo: z.array(z.string().email()).optional().describe("Reply-To email addresses."),
+        subject: z.string().min(1).describe("Email subject."),
+        text: z.string().optional().describe("Plain text email body."),
+        html: z.string().optional().describe("HTML email body."),
+      }),
+    }
+  )
+}
+
+export function resolveAgentTools(toolNames, scope) {
+  const registry = {
+    save_generated_markdown: () => createSaveGeneratedMarkdownTool(scope),
+    append_activity_log: () => createAppendActivityLogTool(scope),
+    send_email_ses: () => createSendSesEmailTool(),
+    list_plan_items: () => createListPlanItemsTool(scope),
+    read_plan_item: () => createReadPlanItemTool(scope),
+    create_plan_item: () => createCreatePlanItemTool(scope),
+    update_plan_item: () => createUpdatePlanItemTool(scope),
+    toggle_plan_item: () => createTogglePlanItemTool(scope),
+    delete_plan_item: () => createDeletePlanItemTool(scope),
+  }
+
+  return toolNames.filter((name) => name !== "filesystem").map((name) => {
+    const factory = registry[name]
+    if (!factory) {
+      throw new Error(`Unknown agent tool: ${name}`)
+    }
+    return factory()
+  })
+}
