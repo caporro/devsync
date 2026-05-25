@@ -2,6 +2,9 @@
 
 DevSync is a local-first, self-hosted team context engine that keeps updates, documentation, artifacts, activity logs, plan items, AI assistants, and automations in sync—turning scattered inputs into shared context, useful outputs, and trackable actions, all stored in a readable filesystem vault that can be inspected and versioned with Git.
 
+
+![devsync](docs/screen-demo-drawing.png)
+
 ## Getting Started / Try
 
 Quick Docker trial:
@@ -22,6 +25,10 @@ http://127.0.0.1:4000
 `AUTH_MODE=none` is only for private local use. For deployment, use password auth.
 
 Full configuration: [docs/reference/env-vars.md](docs/reference/env-vars.md).
+
+docker hub images: [https://hub.docker.com/r/caporro/devsync](https://hub.docker.com/r/caporro/devsync)
+
+![screen edit md](docs/screen-demo-edit-md.png)
 
 ## Work Method
 
