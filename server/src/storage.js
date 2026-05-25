@@ -58,8 +58,12 @@ export function slugify(input) {
   return slug || `project-${Date.now()}`
 }
 
+function humanizeProjectId(projectId) {
+  return String(projectId).replace(/[-_]+/g, " ").trim() || projectId
+}
+
 function assertProjectId(projectId) {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(projectId)) {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(projectId)) {
     throw Object.assign(new Error("Invalid project id"), { statusCode: 400 })
   }
 }
@@ -1327,7 +1331,7 @@ export async function getProjectMetadata(projectId) {
 
   return {
     id: projectId,
-    name: metadata.name ?? projectId,
+    name: humanizeProjectId(projectId),
     owner: metadata.owner ?? "",
     status: metadata.status ?? "active",
     tags: normalizeList(metadata.tags),
@@ -1382,6 +1386,7 @@ export async function createProject(input) {
   }
 
   const projectId = slugify(input.slug ?? name)
+  const displayName = humanizeProjectId(projectId)
   const root = projectPath(projectId)
 
   try {
@@ -1397,7 +1402,6 @@ export async function createProject(input) {
 
   const timestamp = nowIso()
   const metadata = {
-    name,
     owner: String(input.owner ?? "").trim(),
     status: String(input.status ?? "active").trim() || "active",
     tags: normalizeList(input.tags),
@@ -1411,7 +1415,7 @@ export async function createProject(input) {
   await ensurePlanIndex(projectId)
   await safeWriteTextFile(
     path.join(root, "README.md"),
-    markdownDocument(name, "Project notes start here.", { owner: metadata.owner, status: metadata.status })
+    markdownDocument(displayName, "Project notes start here.", { owner: metadata.owner, status: metadata.status })
   )
   await appendSystemLogEvent({
     action: "project.created",
@@ -1419,7 +1423,7 @@ export async function createProject(input) {
     actor: input?.author ?? input?.creator ?? "team",
     projectId,
     target: "project.json",
-    summary: `Created project ${name}`,
+    summary: `Created project ${displayName}`,
   })
 
   return getProject(projectId)
@@ -1428,8 +1432,20 @@ export async function createProject(input) {
 export async function updateProject(projectId, input) {
   await ensureProjectDirs(projectId)
   const current = await getProjectMetadata(projectId)
+  let nextProjectId = projectId
+
+  if (input.name !== undefined) {
+    const nextName = String(input.name).trim()
+
+    if (!nextName) {
+      throw Object.assign(new Error("Project name is required"), { statusCode: 400 })
+    }
+
+    const candidateProjectId = slugify(nextName)
+    nextProjectId = candidateProjectId === slugify(projectId) ? projectId : candidateProjectId
+  }
+
   const metadata = {
-    name: input.name === undefined ? current.name : String(input.name).trim(),
     owner: input.owner === undefined ? current.owner : String(input.owner).trim(),
     status: input.status === undefined ? current.status : String(input.status).trim(),
     tags: input.tags === undefined ? current.tags : normalizeList(input.tags),
@@ -1437,16 +1453,36 @@ export async function updateProject(projectId, input) {
     updatedAt: nowIso(),
   }
 
-  await writeProjectMetadata(projectId, metadata)
+  if (nextProjectId !== projectId) {
+    const nextRoot = projectPath(nextProjectId)
+
+    try {
+      await fs.access(nextRoot)
+      throw Object.assign(new Error("Project already exists"), { statusCode: 409 })
+    } catch (error) {
+      if (error.statusCode === 409) {
+        throw error
+      }
+      if (error.code !== "ENOENT") {
+        throw error
+      }
+    }
+
+    await fs.rename(projectPath(projectId), nextRoot)
+  }
+
+  await writeProjectMetadata(nextProjectId, metadata)
   await appendSystemLogEvent({
-    action: "project.updated",
+    action: nextProjectId === projectId ? "project.updated" : "project.renamed",
     source: input?.source ?? "storage",
     actor: input?.author ?? input?.editor ?? "team",
-    projectId,
+    projectId: nextProjectId,
     target: "project.json",
-    summary: `Updated project ${metadata.name}`,
+    summary: nextProjectId === projectId
+      ? `Updated project ${humanizeProjectId(nextProjectId)}`
+      : `Renamed project ${projectId} to ${nextProjectId}`,
   })
-  return getProject(projectId)
+  return getProject(nextProjectId)
 }
 
 export async function getProject(projectId, options = {}) {

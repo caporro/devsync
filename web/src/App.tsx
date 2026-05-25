@@ -2321,13 +2321,14 @@ function ConfigView({
     <section className="mx-auto max-w-3xl">
       <div className="mb-5">
         <h1 className="text-xl font-semibold text-foreground">Project config</h1>
-        <div className="mt-1 text-xs text-muted-foreground">project.json metadata</div>
+        <div className="mt-1 text-xs text-muted-foreground">Folder-backed project settings</div>
       </div>
 
       <form className="grid gap-4 rounded-lg border border-border bg-card p-4" onSubmit={onSubmit}>
         <label className="grid gap-1.5 text-sm">
-          <span className="font-medium text-foreground">Name</span>
+          <span className="font-medium text-foreground">Name / folder</span>
           <Input name="project-name" onChange={(event) => onNameChange(event.target.value)} value={name} />
+          <span className="text-xs text-muted-foreground">Saving this field renames the project folder.</span>
         </label>
         <label className="grid gap-1.5 text-sm">
           <span className="font-medium text-foreground">Owner</span>
@@ -4601,14 +4602,31 @@ function WorkspaceApp({
       return
     }
 
+    const projectId = selectedProjectId
+    const nextName = configName.trim()
+    const shouldRenameProject = !project || nextName !== project.name
+
     await run("config", async () => {
-      await updateProject(selectedProjectId, {
-        name: configName.trim(),
+      const updated = await updateProject(projectId, {
+        ...(shouldRenameProject ? { name: nextName } : {}),
         owner: configOwner.trim(),
         status: configStatus.trim() || "active",
         tags: configTags.split(",").map((item) => item.trim()).filter(Boolean),
       })
-      await refresh(selectedProjectId)
+      queryClient.setQueryData<ProjectDetails>(["project", updated.id], updated)
+      queryClient.setQueryData<{ items: ProjectSummary[] }>(["projects"], (current) => {
+        if (!current) {
+          return current
+        }
+
+        const items = current.items.filter((item) => item.id !== projectId && item.id !== updated.id)
+
+        return { items: [updated, ...items] }
+      })
+      if (updated.id !== projectId) {
+        setSelectedProjectId(updated.id)
+      }
+      await refresh(updated.id)
     })
   }
 

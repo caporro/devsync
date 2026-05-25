@@ -249,7 +249,8 @@ data/<vault>/
 
 Meaning:
 
-- `project.json`: project metadata, owner, status, and tags;
+- project folder name is the project id/name shown in the UI;
+- `project.json`: project metadata only; `name` is legacy and ignored;
 - `README.md`: main notes;
 - `logs/`: append-only activity log;
 - `artifacts/`: notes, links, uploads, images, PDFs, Excalidraw files;
