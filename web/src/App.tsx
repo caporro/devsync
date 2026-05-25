@@ -21,7 +21,6 @@ import {
   GitBranchIcon,
   Key01Icon,
   MinimizeScreenIcon,
-  Mic01Icon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   Pdf01Icon,
@@ -49,6 +48,7 @@ import {
   PLANNING_DEFAULT_COLUMN_IDS,
 } from "@/components/planning-types"
 import type { PlanningActions, PlanningStatus } from "@/components/planning-types"
+import { VoiceInputButton } from "@/components/voice-input-button"
 import type { ExcalidrawArtifactActions, ExcalidrawArtifactStatus } from "@/components/excalidraw-artifact-editor"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
@@ -1926,6 +1926,13 @@ function AssistantChatView({
     onInputChange(event.target.value)
     syncFileMenu(event.target)
   }, [onInputChange, syncFileMenu])
+  const handleVoiceInputChange = useCallback((nextValue: string) => {
+    onInputChange(nextValue)
+  }, [onInputChange])
+  const handleVoiceInputAfterChange = useCallback((element: HTMLTextAreaElement, nextValue: string) => {
+    resizeAssistantComposer(element)
+    syncFileMenu(element, nextValue)
+  }, [syncFileMenu])
   const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (fileMenu.open) {
       if (event.key === "Escape") {
@@ -2267,13 +2274,13 @@ function AssistantChatView({
               ) : null}
 
               <div className="ml-auto flex items-center gap-2">
-                <button
-                  aria-label="Voice input"
-                  className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted"
-                  type="button"
-                >
-                  <HugeiconsIcon className="size-4.5" icon={Mic01Icon} strokeWidth={2} />
-                </button>
+                <VoiceInputButton
+                  disabled={isSending}
+                  targetRef={textareaRef}
+                  value={input}
+                  onAfterChange={handleVoiceInputAfterChange}
+                  onValueChange={handleVoiceInputChange}
+                />
                 <Button
                   className="size-10 rounded-full p-0"
                   disabled={!input.trim() || isSending}
@@ -6086,7 +6093,14 @@ function WorkspaceApp({
                           ref={logTextareaRef}
                           value={logContent}
                         />
-                        <div className="mt-2 flex justify-end">
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          <VoiceInputButton
+                            disabled={!canWrite}
+                            targetRef={logTextareaRef}
+                            value={logContent}
+                            onAfterChange={syncLogFileMenu}
+                            onValueChange={setLogContent}
+                          />
                           <Button disabled={!canWrite || !logContent.trim()} type="submit">
                             <HugeiconsIcon icon={ArrowUp03Icon} strokeWidth={2} />
                             Save
