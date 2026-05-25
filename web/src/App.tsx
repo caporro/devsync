@@ -1428,7 +1428,7 @@ function renderActivityContent(content: string, onOpenArtifact: (path: string) =
     if (artifactPath) {
       nodes.push(
         <a
-          className="font-medium text-primary underline-offset-2 hover:underline"
+          className="font-medium text-primary underline underline-offset-2"
           href={artifactPath}
           key={`${match.index}-${href}`}
           onClick={(event) => {
@@ -1449,7 +1449,7 @@ function renderActivityContent(content: string, onOpenArtifact: (path: string) =
 
       nodes.push(
         <a
-          className="font-medium text-primary underline-offset-2 hover:underline"
+          className="font-medium text-primary underline underline-offset-2"
           href={safeHref}
           key={`${match.index}-${href}`}
           rel={opensInNewTab(safeHref) ? "noreferrer" : undefined}
