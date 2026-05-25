@@ -1761,20 +1761,27 @@ export async function createPlanItem(projectId, input) {
       deadline,
     })
   )
+  const relativePath = projectRelative(projectId, target)
   await ensurePlanIndex(projectId)
+  await appendActivityEntry(projectId, {
+    createdAt: created,
+    author: creator,
+    title: `Created plan item ${title}`,
+    content: `Created plan item: ${title} (${relativePath}).`,
+  })
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "plan_item.created",
     source: input?.source ?? "storage",
     actor: creator,
     projectId,
-    target: projectRelative(projectId, target),
+    target: relativePath,
     summary: `Created plan item ${title}`,
   })
 
   return {
     name: path.basename(target),
-    path: projectRelative(projectId, target),
+    path: relativePath,
   }
 }
 
