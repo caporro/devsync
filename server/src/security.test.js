@@ -130,6 +130,30 @@ test("login failures are rate limited", async () => {
   assert.ok(Number(blocked.headers["retry-after"]) > 0)
 })
 
+test("project folders without metadata are listed and repaired", async () => {
+  const cookie = await login()
+  const projectId = "manual-import"
+  const root = projectDir(projectId)
+
+  await fs.mkdir(root, { recursive: true })
+  await fs.writeFile(path.join(root, "README.md"), "# Manual Import\n", "utf8")
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/projects",
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  const project = response.json().items.find((item) => item.id === projectId)
+  assert.ok(project)
+  assert.equal(project.name, "manual import")
+
+  const metadata = JSON.parse(await fs.readFile(path.join(root, "project.json"), "utf8"))
+  assert.equal(metadata.status, "active")
+  assert.deepEqual(metadata.tags, [])
+})
+
 test("invalid MCP bearer attempts are rate limited", async () => {
   clearRateLimits()
 

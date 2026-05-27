@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 const envPath = path.join(process.cwd(), ".env")
+const vaultArgNames = new Set(["--vault", "--vault-name", "--devsync-vault"])
 
 function unquote(value) {
   const trimmed = value.trim()
@@ -43,4 +44,40 @@ try {
   if (error.code !== "ENOENT") {
     throw error
   }
+}
+
+function readCliVaultName(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+
+    if (arg.startsWith("--vault=")) {
+      return arg.slice("--vault=".length)
+    }
+
+    if (arg.startsWith("--vault-name=")) {
+      return arg.slice("--vault-name=".length)
+    }
+
+    if (arg.startsWith("--devsync-vault=")) {
+      return arg.slice("--devsync-vault=".length)
+    }
+
+    if (vaultArgNames.has(arg)) {
+      const value = argv[index + 1]
+
+      if (!value || value.startsWith("-")) {
+        throw new Error(`${arg} requires a vault name`)
+      }
+
+      return value
+    }
+  }
+
+  return null
+}
+
+const cliVaultName = readCliVaultName(process.argv.slice(2))
+
+if (cliVaultName !== null) {
+  process.env.DEVSYNC_VAULT_NAME = cliVaultName
 }

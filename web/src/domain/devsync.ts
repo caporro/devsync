@@ -85,6 +85,9 @@ export type PlanningGanttTask = {
   end?: string
   duration?: number
   text?: string
+  status?: string
+  external_id?: string
+  link?: string
   details?: string
   progress?: number
   type?: string

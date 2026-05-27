@@ -92,6 +92,12 @@ Backend:
 npm run dev:server
 ```
 
+Override vault from CLI:
+
+```bash
+npm run dev:server -- --vault another-vault
+```
+
 Frontend:
 
 ```bash

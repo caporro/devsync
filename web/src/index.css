@@ -334,6 +334,40 @@
     font-weight: 700;
   }
 
+  .devsync-gantt .devsync-gantt-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .devsync-gantt .devsync-gantt-action {
+    display: inline-flex;
+    width: 20px;
+    height: 20px;
+    align-items: center;
+    border: 0;
+    background: transparent;
+    justify-content: center;
+    color: var(--wx-gantt-icon-color);
+    cursor: pointer;
+    font-style: normal;
+    line-height: 1;
+    padding: 0;
+    text-decoration: none;
+  }
+
+  .devsync-gantt .devsync-gantt-action:hover {
+    color: var(--wx-color-link);
+  }
+
+  .devsync-gantt .devsync-gantt-action--active {
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--primary) 18%, transparent);
+    color: var(--primary);
+  }
+
   .devsync-gantt .wx-weekend {
     background-color: color-mix(in oklab, var(--muted) 64%, transparent) !important;
   }

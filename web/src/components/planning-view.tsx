@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { MouseEvent, WheelEvent } from "react"
 import { Editor, Gantt, Willow, WillowDark } from "@svar-ui/react-gantt"
 import type { IApi, IColumnConfig, ILink, ITask } from "@svar-ui/react-gantt"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { FilterIcon, FilterRemoveIcon, LinkSquare01Icon } from "@hugeicons/core-free-icons"
 import "@svar-ui/react-gantt/all.css"
 
 import type { PlanningGanttData, PlanningGanttLink, PlanningGanttTask } from "@/domain/devsync"
@@ -27,6 +29,7 @@ import {
 import { cn } from "@/lib/utils"
 
 type PlanningTaskId = string | number
+type PlanningProjectFileOpener = (projectId: string, path: string) => void
 type PlanningCalendar = {
   addRule: () => undefined
   clone: () => PlanningCalendar
@@ -47,11 +50,14 @@ const PLANNING_OFF_DAYS_ENABLED = false
 const PLANNING_COLUMN_BY_ID: Record<PlanningColumnId, IColumnConfig> = {
   text: { id: "text", header: "Task", flexgrow: 2, editor: "text" },
   owner: { id: "owner", header: "Owner", flexgrow: 1, editor: "text" },
+  status: { id: "status", header: "Status", flexgrow: 1, editor: "text" },
+  external_id: { id: "external_id", header: "External ID", flexgrow: 1, editor: "text" },
+  link: { id: "link", header: "Link", flexgrow: 1, editor: "text" },
   start: { id: "start", header: "Start", align: "center", flexgrow: 1, editor: "datepicker" },
   duration: { id: "duration", header: "Days", align: "center", width: 72, editor: "text" },
   progress: { id: "progress", header: "%", align: "center", width: 64, editor: "text" },
 }
-const PLANNING_ADD_TASK_COLUMN: IColumnConfig = { id: "add-task", header: "", width: 48, align: "center" }
+const PLANNING_ADD_TASK_COLUMN_BASE: IColumnConfig = { id: "add-task", header: "", width: 96, align: "center" }
 const PLANNING_GANTT_SCALES = [
   { unit: "month", step: 1, format: "%F %Y" },
   { unit: "day", step: 1, format: "%j" },
@@ -59,6 +65,9 @@ const PLANNING_GANTT_SCALES = [
 const PLANNING_EDITOR_ITEMS = [
   { key: "text", comp: "text", label: "Name", config: { placeholder: "Add task name" } },
   { key: "owner", comp: "text", label: "Owner", config: { placeholder: "Add owner" } },
+  { key: "status", comp: "text", label: "Status", config: { placeholder: "Add status" } },
+  { key: "external_id", comp: "text", label: "External ID", config: { placeholder: "Add external ID" } },
+  { key: "link", comp: "text", label: "Link", config: { placeholder: "Add link" } },
   { key: "details", comp: "textarea", label: "Description", config: { placeholder: "Add description" } },
   {
     key: "type",
@@ -108,19 +117,11 @@ function serializeGanttDate(value: unknown) {
   return match?.[1]
 }
 
-function toGanttTasks(tasks: PlanningGanttTask[]): ITask[] {
-  return tasks.map((task) => ({
-    ...task,
-    start: ganttDate(task.start),
-    end: ganttDate(task.end),
-  }))
-}
-
 function serializeGanttTask(task: ITask): PlanningGanttTask {
   const result: PlanningGanttTask = {}
 
   Object.entries(task).forEach(([key, value]) => {
-    if (key.startsWith("$") || value === undefined || typeof value === "function") {
+    if (key === "data" || key.startsWith("$") || value === undefined || typeof value === "function") {
       return
     }
 
@@ -138,6 +139,64 @@ function serializeGanttTask(task: ITask): PlanningGanttTask {
   return result
 }
 
+function flattenPlanningTasks(tasks: PlanningGanttTask[]) {
+  const result: PlanningGanttTask[] = []
+  const indexById = new Map<string, number>()
+
+  function visit(task: PlanningGanttTask, parent?: PlanningTaskId) {
+    const { data, ...flatTask } = task
+    const id = planningIdKey(flatTask.id)
+
+    if (parent !== undefined && (flatTask.parent === undefined || flatTask.parent === null || flatTask.parent === "")) {
+      flatTask.parent = parent
+    }
+
+    if (id && indexById.has(id)) {
+      result[indexById.get(id)!] = flatTask
+    } else {
+      if (id) {
+        indexById.set(id, result.length)
+      }
+      result.push(flatTask)
+    }
+
+    if (Array.isArray(data)) {
+      data.forEach((child) => visit(child, flatTask.id))
+    }
+  }
+
+  tasks.forEach((task) => visit(task))
+  return result
+}
+
+function toGanttTasks(tasks: PlanningGanttTask[]): ITask[] {
+  const flatTasks = flattenPlanningTasks(tasks)
+  const childCounts = new Map<string, number>()
+
+  flatTasks.forEach((task) => {
+    const parent = planningIdKey(task.parent)
+    if (parent && parent !== "0") {
+      childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1)
+    }
+  })
+
+  return flatTasks.map((task) => {
+    const next: ITask = {
+      ...task,
+      start: ganttDate(task.start),
+      end: ganttDate(task.end),
+    }
+    const id = planningIdKey(next.id)
+
+    delete next.data
+    if (!id || !childCounts.has(id)) {
+      delete next.open
+    }
+
+    return next
+  })
+}
+
 function serializeGanttLink(link: ILink): PlanningGanttLink | null {
   if (link.source === undefined || link.target === undefined) {
     return null
@@ -149,6 +208,224 @@ function serializeGanttLink(link: ILink): PlanningGanttLink | null {
     source: link.source,
     target: link.target,
   }
+}
+
+function planningIdKey(value: unknown) {
+  return value === undefined || value === null || value === "" ? "" : String(value)
+}
+
+function planningTaskOwner(task: ITask | PlanningGanttTask) {
+  return String(task.owner ?? "").trim()
+}
+
+function planningRootParent(value: unknown) {
+  const key = planningIdKey(value)
+  return !key || key === "0"
+}
+
+function planningLinkKey(link: PlanningGanttLink | ILink) {
+  const id = planningIdKey(link.id)
+  return id
+    ? `id:${id}`
+    : `edge:${planningIdKey(link.source)}:${planningIdKey(link.target)}:${link.type}:${String(link.lag ?? "")}`
+}
+
+function collectPlanningBranchIds(tasks: Array<ITask | PlanningGanttTask>, rootId: PlanningTaskId | null) {
+  const rootKey = planningIdKey(rootId)
+  if (!rootKey) {
+    return null
+  }
+
+  const taskIds = new Set<string>()
+  const childrenByParent = new Map<string, string[]>()
+
+  tasks.forEach((task) => {
+    const id = planningIdKey(task.id)
+    const parent = planningIdKey(task.parent)
+
+    if (!id) {
+      return
+    }
+
+    taskIds.add(id)
+    if (parent && parent !== "0") {
+      childrenByParent.set(parent, [...(childrenByParent.get(parent) ?? []), id])
+    }
+  })
+
+  if (!taskIds.has(rootKey)) {
+    return null
+  }
+
+  const branchIds = new Set<string>([rootKey])
+  const queue = [rootKey]
+
+  while (queue.length) {
+    const current = queue.shift()
+    if (!current) {
+      continue
+    }
+
+    ;(childrenByParent.get(current) ?? []).forEach((childId) => {
+      if (!branchIds.has(childId)) {
+        branchIds.add(childId)
+        queue.push(childId)
+      }
+    })
+  }
+
+  return branchIds
+}
+
+function taskHasPlanningAncestor(
+  task: ITask | PlanningGanttTask,
+  ancestorIds: Set<string>,
+  parentById: Map<string, string>
+) {
+  const seen = new Set<string>()
+  let parent = planningIdKey(task.parent)
+
+  while (parent && parent !== "0" && !seen.has(parent)) {
+    if (ancestorIds.has(parent)) {
+      return true
+    }
+
+    seen.add(parent)
+    parent = parentById.get(parent) ?? ""
+  }
+
+  return false
+}
+
+function hasUnsafeHrefCharacter(value: string) {
+  return [...value].some((char) => {
+    const code = char.charCodeAt(0)
+    return code <= 31 || code === 127 || /\s/.test(char)
+  })
+}
+
+function validPlanningProjectId(value: unknown) {
+  const projectId = String(value ?? "").trim()
+  return /^[a-z0-9][a-z0-9_-]*$/.test(projectId) ? projectId : null
+}
+
+function encodePlanningRoutePath(value: string, section: string) {
+  const parts = value.split("/").filter(Boolean)
+  const scopedParts = parts[0] === section ? parts.slice(1) : parts
+
+  if (!scopedParts.length || scopedParts.some((part) => part === "." || part === "..")) {
+    return null
+  }
+
+  return scopedParts.map(encodeURIComponent).join("/")
+}
+
+function planningInternalLink(value: string, row: ITask) {
+  let normalized = value.split(/[?#]/, 1)[0].replace(/\\/g, "/")
+
+  try {
+    normalized = decodeURIComponent(normalized)
+  } catch {
+    // Keep the original path if it is not URI encoded.
+  }
+
+  normalized = normalized.replace(/^\/+/, "").replace(/^(?:\.\/)+/, "")
+
+  const routed = normalized.match(/^projects\/([^/]+)\/(artifacts|generated|plan)\/(.+)$/)
+  if (routed) {
+    const [, projectId, section, path] = routed
+    const routePath = encodePlanningRoutePath(path, section)
+    return routePath && validPlanningProjectId(projectId)
+      ? { href: `/projects/${encodeURIComponent(projectId)}/${section}/${routePath}`, path: `${section}/${path}`, projectId, type: "internal" as const }
+      : null
+  }
+
+  const relative = normalized.match(/^(artifacts|generated|plan)\/(.+)$/)
+  const projectId = validPlanningProjectId(row.projectId)
+  if (relative && projectId) {
+    const [, section, path] = relative
+    const routePath = encodePlanningRoutePath(path, section)
+    return routePath
+      ? { href: `/projects/${encodeURIComponent(projectId)}/${section}/${routePath}`, path: `${section}/${path}`, projectId, type: "internal" as const }
+      : null
+  }
+
+  return null
+}
+
+function planningExternalLink(value: string) {
+  try {
+    const url = new URL(value)
+    return ["http:", "https:", "mailto:", "tel:"].includes(url.protocol)
+      ? { href: value, type: "external" as const }
+      : null
+  } catch {
+    return null
+  }
+}
+
+function resolvePlanningLink(value: unknown, row: ITask) {
+  const href = String(value ?? "").trim()
+  if (!href || hasUnsafeHrefCharacter(href)) {
+    return null
+  }
+
+  return planningInternalLink(href, row) ?? planningExternalLink(href)
+}
+
+function PlanningActionCell({
+  activeBranchTaskId,
+  onFilterTask,
+  onOpenProjectFile,
+  row,
+}: Parameters<NonNullable<IColumnConfig["cell"]>>[0] & {
+  activeBranchTaskId?: PlanningTaskId | null
+  onFilterTask?: (id: PlanningTaskId) => void
+  onOpenProjectFile?: PlanningProjectFileOpener
+}) {
+  const link = resolvePlanningLink(row.link, row)
+  const branchFilterActive = planningIdKey(row.id) === planningIdKey(activeBranchTaskId)
+
+  return (
+    <div className="devsync-gantt-actions">
+      {link ? (
+        <a
+          aria-label="Open link"
+          className="devsync-gantt-action devsync-gantt-link-action"
+          href={link.href}
+          onClick={(event) => {
+            event.stopPropagation()
+            if (link.type === "internal" && onOpenProjectFile && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+              event.preventDefault()
+              onOpenProjectFile(link.projectId, link.path)
+            }
+          }}
+          onMouseDown={(event) => event.stopPropagation()}
+          rel="noreferrer"
+          target={link.type === "external" && /^https?:\/\//i.test(link.href) ? "_blank" : undefined}
+          title="Open link"
+        >
+          <HugeiconsIcon className="size-4" icon={LinkSquare01Icon} strokeWidth={2} />
+        </a>
+      ) : null}
+      <button
+        aria-label={branchFilterActive ? "Clear filters" : "Filter branch"}
+        className={cn("devsync-gantt-action", branchFilterActive && "devsync-gantt-action--active")}
+        onClick={(event) => {
+          event.stopPropagation()
+          if (row.id !== undefined && row.id !== null) {
+            onFilterTask?.(row.id)
+          }
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+        title={branchFilterActive ? "Clear filters" : "Filter branch"}
+        type="button"
+      >
+        <HugeiconsIcon className="size-4" icon={branchFilterActive ? FilterRemoveIcon : FilterIcon} strokeWidth={2} />
+      </button>
+      <i className="devsync-gantt-action wxi-plus" data-action="add-task" title="Add task" />
+    </div>
+  )
 }
 
 function planningTaskIsSummary(task: ITask) {
@@ -199,19 +476,45 @@ function initialPlanningColumns() {
   return PLANNING_DEFAULT_COLUMN_IDS
 }
 
-function planningColumnsFor(ids: PlanningColumnId[]) {
+function planningActionColumn(
+  onOpenProjectFile?: PlanningProjectFileOpener,
+  onFilterTask?: (id: PlanningTaskId) => void,
+  activeBranchTaskId?: PlanningTaskId | null
+): IColumnConfig {
+  return {
+    ...PLANNING_ADD_TASK_COLUMN_BASE,
+    cell: (props) => (
+      <PlanningActionCell
+        {...props}
+        activeBranchTaskId={activeBranchTaskId}
+        onFilterTask={onFilterTask}
+        onOpenProjectFile={onOpenProjectFile}
+      />
+    ),
+  }
+}
+
+function planningColumnsFor(
+  ids: PlanningColumnId[],
+  onOpenProjectFile?: PlanningProjectFileOpener,
+  onFilterTask?: (id: PlanningTaskId) => void,
+  activeBranchTaskId?: PlanningTaskId | null
+) {
   const selected = new Set(normalizePlanningColumns(ids))
   const columns = PLANNING_COLUMN_OPTIONS
     .filter((option) => selected.has(option.id))
     .map((option) => PLANNING_COLUMN_BY_ID[option.id])
 
-  return [...columns, PLANNING_ADD_TASK_COLUMN]
+  return [...columns, planningActionColumn(onOpenProjectFile, onFilterTask, activeBranchTaskId)]
 }
 
 function planningDefaultTask(respectOffDays: boolean) {
   return {
     text: "New task",
     owner: "",
+    status: "",
+    external_id: "",
+    link: "",
     start: respectOffDays ? nextPlanningWorkingDate(new Date()) : planningDay(new Date()),
     duration: 1,
     progress: 0,
@@ -316,6 +619,7 @@ export function PlanningView({
   isDark,
   isLoading,
   onActionsChange,
+  onOpenProjectFile,
   onSave,
   onStatusChange,
 }: {
@@ -323,6 +627,7 @@ export function PlanningView({
   isDark: boolean
   isLoading: boolean
   onActionsChange: (actions: PlanningActions | null) => void
+  onOpenProjectFile?: PlanningProjectFileOpener
   onSave: (data: Pick<PlanningGanttData, "tasks" | "links">) => Promise<void>
   onStatusChange: (status: PlanningStatus | null) => void
 }) {
@@ -339,8 +644,9 @@ export function PlanningView({
   const [selectedTaskId, setSelectedTaskId] = useState<PlanningTaskId | null>(null)
   const [taskListVisible, setTaskListVisible] = useState(true)
   const [visibleColumns, setVisibleColumns] = useState<PlanningColumnId[]>(initialPlanningColumns)
+  const [ownerFilter, setOwnerFilter] = useState<string | null>(null)
+  const [branchFilterTaskId, setBranchFilterTaskId] = useState<PlanningTaskId | null>(null)
   const [pendingDeleteIds, setPendingDeleteIds] = useState<PlanningTaskId[]>([])
-  const columns = useMemo(() => planningColumnsFor(visibleColumns), [visibleColumns])
   const tasks = useMemo(() => toGanttTasks(data?.tasks ?? []), [data?.tasks])
   const links = useMemo(() => data?.links ?? [], [data?.links])
   const Theme = isDark ? WillowDark : Willow
@@ -375,6 +681,134 @@ export function PlanningView({
     void apiRef.current?.exec("show-editor", { id: null as unknown as PlanningTaskId })
     refreshLayout()
   }, [refreshLayout])
+
+  const applyBranchFilter = useCallback((id: PlanningTaskId) => {
+    if (planningIdKey(id) === planningIdKey(branchFilterTaskId)) {
+      setOwnerFilter(null)
+      setBranchFilterTaskId(null)
+      setSelectedTaskId(null)
+      return
+    }
+
+    setBranchFilterTaskId(id)
+    setSelectedTaskId(id)
+  }, [branchFilterTaskId])
+
+  const columns = useMemo(
+    () => planningColumnsFor(visibleColumns, onOpenProjectFile, applyBranchFilter, branchFilterTaskId),
+    [applyBranchFilter, branchFilterTaskId, onOpenProjectFile, visibleColumns]
+  )
+
+  const ownerOptions = useMemo(() => {
+    return Array.from(new Set(tasks.map(planningTaskOwner).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  }, [tasks])
+
+  const branchIds = useMemo(() => collectPlanningBranchIds(tasks, branchFilterTaskId), [branchFilterTaskId, tasks])
+  const activeOwnerFilter = ownerFilter && ownerOptions.includes(ownerFilter) ? ownerFilter : null
+  const filtersActive = Boolean(activeOwnerFilter || branchIds)
+
+  const visibleTaskKeys = useMemo(() => {
+    const next = new Set<string>()
+
+    tasks.forEach((task) => {
+      const id = planningIdKey(task.id)
+
+      if (!id) {
+        return
+      }
+
+      if (activeOwnerFilter && planningTaskOwner(task) !== activeOwnerFilter) {
+        return
+      }
+
+      if (branchIds && !branchIds.has(id)) {
+        return
+      }
+
+      next.add(id)
+    })
+
+    return next
+  }, [activeOwnerFilter, branchIds, tasks])
+
+  const parentOverrides = useMemo(() => {
+    const next = new Map<string, PlanningTaskId>()
+
+    tasks.forEach((task) => {
+      const id = planningIdKey(task.id)
+      const parent = planningIdKey(task.parent)
+
+      if (id && parent && parent !== "0" && visibleTaskKeys.has(id) && !visibleTaskKeys.has(parent)) {
+        next.set(id, task.parent as PlanningTaskId)
+      }
+    })
+
+    return next
+  }, [tasks, visibleTaskKeys])
+
+  const visibleTasks = useMemo(() => {
+    const nextTasks = filtersActive
+      ? tasks.filter((task) => {
+        const id = planningIdKey(task.id)
+        return id && visibleTaskKeys.has(id)
+      })
+      .map((task) => {
+        const id = planningIdKey(task.id)
+        if (!parentOverrides.has(id)) {
+          return task
+        }
+
+        const next = { ...task }
+        delete next.parent
+        return next
+      })
+      : tasks
+    const childCounts = new Map<string, number>()
+
+    nextTasks.forEach((task) => {
+      const parent = planningIdKey(task.parent)
+      if (parent && parent !== "0") {
+        childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1)
+      }
+    })
+
+    return nextTasks.map((task) => {
+      const next = { ...task }
+      const id = planningIdKey(next.id)
+
+      delete next.data
+      if (!id || !childCounts.has(id)) {
+        delete next.open
+      }
+
+      return next
+    })
+  }, [filtersActive, parentOverrides, tasks, visibleTaskKeys])
+
+  const visibleLinkKeys = useMemo(() => {
+    if (!filtersActive) {
+      return new Set(links.map(planningLinkKey))
+    }
+
+    return new Set(
+      links
+        .filter((link) => visibleTaskKeys.has(planningIdKey(link.source)) && visibleTaskKeys.has(planningIdKey(link.target)))
+        .map(planningLinkKey)
+    )
+  }, [filtersActive, links, visibleTaskKeys])
+
+  const visibleLinks = useMemo(() => {
+    if (!filtersActive) {
+      return links
+    }
+
+    return links.filter((link) => visibleLinkKeys.has(planningLinkKey(link)))
+  }, [filtersActive, links, visibleLinkKeys])
+
+  const selectedTaskVisible = useMemo(() => {
+    const selectedKey = planningIdKey(selectedTaskId)
+    return !filtersActive || !selectedKey || visibleTaskKeys.has(selectedKey)
+  }, [filtersActive, selectedTaskId, visibleTaskKeys])
 
   const requestDelete = useCallback((ids: PlanningTaskId[]) => {
     if (ids.length) {
@@ -435,15 +869,120 @@ export function PlanningView({
 
   const handleSave = useCallback(async () => {
     const nextApi = apiRef.current
-    const stateLinks = nextApi?.getState().links.map((link) => link) ?? links
+    const apiTasks = nextApi?.serialize() ?? visibleTasks
+    const nextTasks = apiTasks.map((task) => {
+      const result = serializeGanttTask(task)
+      const originalParent = parentOverrides.get(planningIdKey(result.id))
+
+      if (originalParent !== undefined && planningRootParent(result.parent)) {
+        result.parent = originalParent
+      }
+
+      return result
+    })
+    const stateLinks = nextApi?.getState().links.map((link) => link) ?? visibleLinks
     const nextLinks = stateLinks.map(serializeGanttLink).filter((link): link is PlanningGanttLink => Boolean(link))
 
-    await onSave({
-      tasks: (nextApi?.serialize() ?? tasks).map(serializeGanttTask),
-      links: nextLinks,
+    if (!filtersActive) {
+      await onSave({
+        tasks: nextTasks,
+        links: nextLinks,
+      })
+      setIsDirty(false)
+      return
+    }
+
+    const allTasks = tasks.map(serializeGanttTask)
+    const originalTaskKeys = new Set(allTasks.map((task) => planningIdKey(task.id)).filter(Boolean))
+    const visibleOriginalTaskKeys = new Set(visibleTasks.map((task) => planningIdKey(task.id)).filter(Boolean))
+    const savedTaskKeys = new Set(nextTasks.map((task) => planningIdKey(task.id)).filter(Boolean))
+    const deletedTaskKeys = new Set(
+      Array.from(visibleOriginalTaskKeys).filter((key) => !savedTaskKeys.has(key))
+    )
+    const parentById = new Map(
+      allTasks
+        .map((task) => [planningIdKey(task.id), planningIdKey(task.parent)] as const)
+        .filter(([id]) => Boolean(id))
+    )
+    const removedTaskKeys = new Set(deletedTaskKeys)
+
+    allTasks.forEach((task) => {
+      const id = planningIdKey(task.id)
+      if (id && !visibleOriginalTaskKeys.has(id) && taskHasPlanningAncestor(task, deletedTaskKeys, parentById)) {
+        removedTaskKeys.add(id)
+      }
     })
+
+    const savedTaskById = new Map(
+      nextTasks
+        .map((task) => [planningIdKey(task.id), task] as const)
+        .filter(([id]) => Boolean(id))
+    )
+    const mergedTasks: PlanningGanttTask[] = []
+
+    allTasks.forEach((task) => {
+      const id = planningIdKey(task.id)
+
+      if (id && removedTaskKeys.has(id)) {
+        return
+      }
+
+      const savedTask = savedTaskById.get(id)
+      if (savedTask) {
+        mergedTasks.push(savedTask)
+        return
+      }
+
+      if (id && visibleOriginalTaskKeys.has(id)) {
+        return
+      }
+
+      mergedTasks.push(task)
+    })
+
+    nextTasks.forEach((task) => {
+      const id = planningIdKey(task.id)
+      if (!id || !originalTaskKeys.has(id)) {
+        mergedTasks.push(task)
+      }
+    })
+
+    const savedLinkByKey = new Map(nextLinks.map((link) => [planningLinkKey(link), link] as const))
+    const mergedLinks: PlanningGanttLink[] = []
+
+    links.forEach((link) => {
+      const key = planningLinkKey(link)
+      const hasRemovedTask = removedTaskKeys.has(planningIdKey(link.source)) || removedTaskKeys.has(planningIdKey(link.target))
+
+      if (hasRemovedTask) {
+        return
+      }
+
+      const savedLink = savedLinkByKey.get(key)
+      if (savedLink) {
+        mergedLinks.push(savedLink)
+        return
+      }
+
+      if (visibleLinkKeys.has(key)) {
+        return
+      }
+
+      mergedLinks.push(link)
+    })
+
+    nextLinks.forEach((link) => {
+      const key = planningLinkKey(link)
+      const hasRemovedTask = removedTaskKeys.has(planningIdKey(link.source)) || removedTaskKeys.has(planningIdKey(link.target))
+
+      if (!hasRemovedTask && !links.some((current) => planningLinkKey(current) === key)) {
+        mergedLinks.push(link)
+      }
+    })
+
+    await onSave({ tasks: mergedTasks, links: mergedLinks })
     setIsDirty(false)
-  }, [links, onSave, tasks])
+  }, [filtersActive, links, onSave, parentOverrides, tasks, visibleLinkKeys, visibleLinks, visibleTasks])
 
   const confirmDeleteTasks = useCallback(() => {
     const nextApi = apiRef.current
@@ -466,6 +1005,10 @@ export function PlanningView({
   const actions = useMemo<PlanningActions>(() => ({
     deleteSelected: () => {
       requestDelete(currentSelectedIds())
+    },
+    filterByOwner: (owner) => {
+      setOwnerFilter(owner?.trim() || null)
+      refreshLayout()
     },
     save: handleSave,
     toggleColumn: (id) => {
@@ -501,12 +1044,14 @@ export function PlanningView({
 
   useEffect(() => {
     onStatusChange({
-      canEdit: Boolean(selectedTaskId),
+      canEdit: Boolean(selectedTaskId && selectedTaskVisible),
       dirty: isDirty,
+      ownerFilter: activeOwnerFilter,
+      ownerOptions,
       taskListVisible,
       visibleColumns,
     })
-  }, [isDirty, onStatusChange, selectedTaskId, taskListVisible, visibleColumns])
+  }, [activeOwnerFilter, isDirty, onStatusChange, ownerOptions, selectedTaskId, selectedTaskVisible, taskListVisible, visibleColumns])
 
   useEffect(() => () => onStatusChange(null), [onStatusChange])
 
@@ -565,7 +1110,7 @@ export function PlanningView({
 
   useEffect(() => {
     refreshLayout()
-  }, [columns, isDirty, refreshLayout, taskListVisible])
+  }, [columns, isDirty, refreshLayout, taskListVisible, visibleLinks, visibleTasks])
 
   useEffect(() => {
     function isInputTarget(target: EventTarget | null) {
@@ -694,12 +1239,12 @@ export function PlanningView({
                   calendar={PLANNING_OFF_DAYS_ENABLED ? PLANNING_CALENDAR : undefined}
                   cellBorders="full"
                   columns={columns}
-                  highlightTime={PLANNING_OFF_DAYS_ENABLED ? highlightPlanningTime : undefined}
+                  highlightTime={highlightPlanningTime}
                   init={handleInit}
-                  links={links}
+                  links={visibleLinks}
                   ref={apiRef}
                   scales={PLANNING_GANTT_SCALES}
-                  tasks={tasks}
+                  tasks={visibleTasks}
                   zoom
                 />
               </div>
