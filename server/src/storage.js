@@ -324,6 +324,9 @@ function normalizeGanttTask(input) {
 
   task.id = typeof id === "number" ? id : String(id)
   task.text = String(task.text ?? task.title ?? "Untitled").trim() || "Untitled"
+  task.status = String(task.status ?? "").trim()
+  task.external_id = String(task.external_id ?? "").trim()
+  task.link = String(task.link ?? "").trim()
   if (task.start) task.start = normalizeGanttDate(task.start)
   if (task.end) task.end = normalizeGanttDate(task.end)
   if (Number.isFinite(duration) && duration >= 0) task.duration = duration
@@ -373,6 +376,19 @@ function persistedProjectMetadata(metadata) {
 
 async function writeProjectMetadata(projectId, metadata) {
   await safeWriteTextFile(metadataPath(projectId), `${JSON.stringify(persistedProjectMetadata(metadata), null, 2)}\n`)
+}
+
+async function inferProjectMetadata(projectId) {
+  const stat = await fs.stat(projectPath(projectId))
+  const createdAt = stat.birthtimeMs > 0 ? stat.birthtime.toISOString() : stat.mtime.toISOString()
+
+  return {
+    owner: "",
+    status: "active",
+    tags: [],
+    createdAt,
+    updatedAt: stat.mtime.toISOString(),
+  }
 }
 
 async function touchProject(projectId) {
@@ -1327,7 +1343,18 @@ export async function getDocFolder(docId) {
 }
 
 export async function getProjectMetadata(projectId) {
-  const metadata = await readJson(metadataPath(projectId))
+  let metadata
+
+  try {
+    metadata = await readJson(metadataPath(projectId))
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error
+    }
+
+    metadata = await inferProjectMetadata(projectId)
+    await writeProjectMetadata(projectId, metadata)
+  }
 
   return {
     id: projectId,

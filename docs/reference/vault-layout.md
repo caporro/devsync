@@ -46,7 +46,7 @@ data/<vault>/
 | --- | --- |
 | `README.md` | General vault notes. |
 | `assistant.md` | Global Assistant instructions. |
-| `vault-plan.json` | Global planning data. |
+| `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `artifacts/...`, `plan/...`, or `generated/...` path when the task has `projectId`. |
 | `roles/` | Global Assistant roles. |
 | `workflows/` | Global workflows. |
 | `docs/` | Team documentation not tied to a single project. |

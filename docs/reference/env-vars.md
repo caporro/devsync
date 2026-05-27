@@ -37,6 +37,14 @@ Main environment variables.
 | `DEVSYNC_ACTIVITY_LOG_ENTRIES_PER_FILE` | `50` | Entries per activity log segment. |
 | `DEVSYNC_ACTIVITY_LOG_FILES` | `2` | Activity log segments loaded by default. |
 
+CLI override:
+
+```bash
+npm run dev:server -- --vault another-vault
+```
+
+The CLI vault overrides `DEVSYNC_VAULT_NAME`.
+
 ## API and MCP
 
 | Variable | Default | Use |

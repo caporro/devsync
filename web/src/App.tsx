@@ -16,6 +16,7 @@ import {
   FileImageIcon,
   FileLinkIcon,
   FileUnknownIcon,
+  FilterIcon,
   FloppyDiskIcon,
   FullScreenIcon,
   GitBranchIcon,
@@ -83,6 +84,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -4983,11 +4986,17 @@ function WorkspaceApp({
     handleLogKeyDown(event)
   }
 
-  function handleOpenProjectFileLink(path: string) {
+  function handleOpenProjectFileLink(path: string, projectId = selectedProjectId) {
     const normalized = markdownProjectFilePath(path) ?? path
+    const targetProjectId = projectId ?? selectedProjectId
+
+    if (!targetProjectId) {
+      return
+    }
 
     if (normalized.startsWith("artifacts/")) {
       guardedNavigation(() => {
+        setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(normalized)
         setSelectedGeneratedPath(null)
         setSelectedPlanItemPath(null)
@@ -4999,6 +5008,7 @@ function WorkspaceApp({
 
     if (normalized.startsWith("generated/")) {
       guardedNavigation(() => {
+        setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
         setSelectedGeneratedPath(normalized)
         setSelectedPlanItemPath(null)
@@ -5010,6 +5020,7 @@ function WorkspaceApp({
 
     if (normalized.startsWith("plan/")) {
       guardedNavigation(() => {
+        setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
         setSelectedGeneratedPath(null)
         setSelectedPlanItemPath(normalized)
@@ -5612,16 +5623,34 @@ function WorkspaceApp({
                 <span className="hidden text-xs text-muted-foreground lg:inline">
                   {planningStatus?.dirty ? "Unsaved" : "Saved"}
                 </span>
-                <Button
-                  disabled={!planningStatus?.canEdit}
-                  onClick={() => planningActionsRef.current?.deleteSelected()}
-                  size="icon"
-                  title="Delete task"
-                  type="button"
-                  variant="outline"
-                >
-                  <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      disabled={!planningActionsRef.current || !(planningStatus?.ownerOptions.length)}
+                      title="Filter by owner"
+                      type="button"
+                      variant={planningStatus?.ownerFilter ? "secondary" : "outline"}
+                    >
+                      <HugeiconsIcon icon={FilterIcon} strokeWidth={2} />
+                      <span className="max-w-24 truncate">{planningStatus?.ownerFilter ?? "Owner"}</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Owner filter</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup
+                      onValueChange={(owner) => planningActionsRef.current?.filterByOwner(owner || null)}
+                      value={planningStatus?.ownerFilter ?? ""}
+                    >
+                      <DropdownMenuRadioItem value="">All owners</DropdownMenuRadioItem>
+                      {(planningStatus?.ownerOptions ?? []).map((owner) => (
+                        <DropdownMenuRadioItem key={owner} value={owner}>
+                          {owner}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button disabled={!planningActionsRef.current} title="Task columns" type="button" variant="outline">
@@ -5818,6 +5847,7 @@ function WorkspaceApp({
                       isDark={theme === "dark" || (theme === "system" && document.documentElement.classList.contains("dark"))}
                       isLoading={planningQuery.isLoading}
                       onActionsChange={handlePlanningActionsChange}
+                      onOpenProjectFile={(projectId, path) => handleOpenProjectFileLink(path, projectId)}
                       onSave={handleSavePlanningGantt}
                       onStatusChange={handlePlanningStatusChange}
                     />
