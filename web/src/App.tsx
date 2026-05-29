@@ -118,6 +118,7 @@ import {
   getCurrentUser,
   getAppReadme,
   getDocsFolder,
+  getNews,
   getPlanningGantt,
   getProject,
   getProjectActivity,
@@ -149,7 +150,7 @@ import {
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MyPlanItem, MyPlanItemGroup, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
+import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MyPlanItem, MyPlanItemGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
 import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, WorkflowDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
@@ -183,7 +184,7 @@ const PlanningView = lazy(() =>
   }))
 )
 
-type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "plan" | "plan-item" | "my-items" | "docs" | "git" | "planning"
+type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "plan" | "plan-item" | "my-items" | "news" | "docs" | "git" | "planning"
 type AppRoute = {
   mainView: MainView
   projectId: string | null
@@ -404,6 +405,10 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     return emptyRoute("my-items")
   }
 
+  if (parts[0] === "news") {
+    return emptyRoute("news")
+  }
+
   if (parts[0] === "planning") {
     return emptyRoute("planning")
   }
@@ -443,6 +448,10 @@ function buildAppPath(route: AppRoute) {
 
   if (route.mainView === "my-items") {
     return "/my-items"
+  }
+
+  if (route.mainView === "news") {
+    return "/news"
   }
 
   if (route.mainView === "planning") {
@@ -2540,6 +2549,66 @@ function MyItemsView({
   )
 }
 
+function NewsView({
+  bottomRef,
+  entries,
+  isLoading,
+  onOpenArtifact,
+  onOpenProject,
+}: {
+  bottomRef: RefObject<HTMLDivElement | null>
+  entries: NewsEntry[]
+  isLoading: boolean
+  onOpenArtifact: (projectId: string, path: string) => void
+  onOpenProject: (projectId: string) => void
+}) {
+  return (
+    <section className="mx-auto max-w-5xl">
+      <div className="mb-4">
+        <h1 className="text-xl font-semibold text-foreground">News</h1>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {isLoading ? "Loading..." : `${entries.length} project update${entries.length === 1 ? "" : "s"}`}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="text-sm text-muted-foreground">Loading...</div>
+      ) : entries.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+          No project updates yet.
+        </div>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border bg-card">
+          {entries.map((entry) => {
+            const actorOrEvent = activityActorOrEvent(entry)
+
+            return (
+              <article className="px-3 py-2 text-xs leading-5 text-foreground" key={entry.id}>
+                <div className="whitespace-pre-wrap">
+                  <span className="text-muted-foreground">{formatActivityDate(entry.createdAt)}</span>
+                  <span className="text-muted-foreground"> - </span>
+                  <button
+                    className="font-medium text-foreground hover:underline"
+                    onClick={() => onOpenProject(entry.projectId)}
+                    type="button"
+                  >
+                    {entry.projectName}
+                  </button>
+                  <span className="text-muted-foreground"> - </span>
+                  <span className={cn("font-medium", activityActorClass(actorOrEvent))}>{actorOrEvent}</span>
+                  <span>: </span>
+                  <span>{renderActivityContent(entry.content, (path) => onOpenArtifact(entry.projectId, path))}</span>
+                </div>
+              </article>
+            )
+          })}
+          <div ref={bottomRef} />
+        </div>
+      )}
+    </section>
+  )
+}
+
 function FileIndexView({
   checkboxes = false,
   content,
@@ -3502,6 +3571,7 @@ function WorkspaceApp({
   const { setTheme, theme } = useTheme()
   const activityScrollRef = useRef<HTMLDivElement | null>(null)
   const activityBottomRef = useRef<HTMLDivElement | null>(null)
+  const newsBottomRef = useRef<HTMLDivElement | null>(null)
   const assistantBottomRef = useRef<HTMLDivElement | null>(null)
   const assistantScrollFrameRef = useRef<number | null>(null)
   const agentEventSourceRef = useRef<EventSource | null>(null)
@@ -3579,6 +3649,11 @@ function WorkspaceApp({
     queryKey: ["my-plan-items"],
     queryFn: listMyPlanItems,
     enabled: mainView === "my-items",
+  })
+  const newsQuery = useQuery({
+    queryKey: ["news"],
+    queryFn: getNews,
+    enabled: mainView === "news",
   })
   const projects = projectsQuery.data?.items ?? EMPTY_PROJECTS
   const docs = docsQuery.data?.items ?? EMPTY_DOCS
@@ -3675,7 +3750,7 @@ function WorkspaceApp({
   }, [])
 
   useEffect(() => {
-    const needsProject = !["agents", "docs", "git", "my-items", "planning", "readme", "system-log"].includes(mainView)
+    const needsProject = !["agents", "docs", "git", "my-items", "news", "planning", "readme", "system-log"].includes(mainView)
     if (needsProject && !selectedProjectId && projects.length > 0) {
       return
     }
@@ -3711,7 +3786,7 @@ function WorkspaceApp({
   ])
 
   useEffect(() => {
-    if (["agents", "docs", "git", "my-items", "planning", "readme", "system-log"].includes(mainView)) {
+    if (["agents", "docs", "git", "my-items", "news", "planning", "readme", "system-log"].includes(mainView)) {
       return
     }
 
@@ -3838,6 +3913,7 @@ function WorkspaceApp({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["projects"] }),
       queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["news"] }),
     ])
   }, [queryClient])
 
@@ -5031,6 +5107,7 @@ function WorkspaceApp({
   }
 
   const myItemGroups = myItemsQuery.data?.items ?? []
+  const newsEntries = newsQuery.data?.items ?? []
   const docFiles = docsFolder?.files ?? EMPTY_FILES
   const selectedArtifact = artifacts.find((file) => file.path === selectedArtifactPath) ?? null
   const selectedGenerated = generated.find((file) => file.path === selectedGeneratedPath) ?? null
@@ -5049,7 +5126,7 @@ function WorkspaceApp({
   const drawingFullscreenActive = selectedArtifactIsExcalidraw && drawingFullscreen
   const planningFullscreenActive = mainView === "planning" && planningFullscreen
   const immersiveViewActive = drawingFullscreenActive || planningFullscreenActive
-  const isGlobalView = ["docs", "git", "my-items", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
+  const isGlobalView = ["docs", "git", "my-items", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
   const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedPlanItem
   const artifactQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedArtifactPath],
@@ -5366,6 +5443,14 @@ function WorkspaceApp({
     activityBottomRef.current?.scrollIntoView({ block: "end" })
   }, [entries.length, mainView, selectedProjectId])
 
+  useEffect(() => {
+    if (mainView !== "news" || newsQuery.isLoading) {
+      return
+    }
+
+    newsBottomRef.current?.scrollIntoView({ block: "end" })
+  }, [mainView, newsEntries.length, newsQuery.isLoading])
+
   return (
     <div className="flex h-svh flex-col overflow-hidden">
       {message ? (
@@ -5416,6 +5501,18 @@ function WorkspaceApp({
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("my-items")
+            })
+          }}
+          onOpenNews={() => {
+            guardedNavigation(() => {
+              setSelectedDocId(null)
+              setSelectedProjectId(null)
+              setSelectedArtifactPath(null)
+              setSelectedGeneratedPath(null)
+              setSelectedPlanItemPath(null)
+              setSelectedDocFilePath(null)
+              setPlaceholderTitle("")
+              setMainView("news")
             })
           }}
           onOpenPlanning={() => {
@@ -5499,6 +5596,8 @@ function WorkspaceApp({
                     ? "Git"
                     : mainView === "system-log"
                       ? "System Log"
+                    : mainView === "news"
+                      ? "News"
                     : mainView === "my-items"
                       ? "My items"
                     : mainView === "planning"
@@ -5832,6 +5931,14 @@ function WorkspaceApp({
                       result={gitResult}
                       onPull={() => void handleGitAction("pull")}
                       onPush={() => void handleGitAction("push")}
+                    />
+                  ) : mainView === "news" ? (
+                    <NewsView
+                      bottomRef={newsBottomRef}
+                      entries={newsEntries}
+                      isLoading={newsQuery.isLoading}
+                      onOpenArtifact={(projectId, path) => handleOpenProjectFileLink(path, projectId)}
+                      onOpenProject={handleSelectProject}
                     />
                   ) : mainView === "my-items" ? (
                     <MyItemsView

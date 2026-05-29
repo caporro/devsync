@@ -36,6 +36,7 @@ import {
   getDocFolder,
   getPlanningGantt,
   getProject,
+  listNewsEntries,
   listDocs,
   listPlanItems,
   listProjects,
@@ -478,6 +479,14 @@ app.get("/api/readme", async (request, reply) => {
 app.get("/api/system-log", async (request, reply) => {
   try {
     reply.send(await listSystemLogEvents({ limit: request.query.limit }))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.get("/api/news", async (request, reply) => {
+  try {
+    reply.send({ items: await listNewsEntries() })
   } catch (error) {
     sendError(reply, error)
   }

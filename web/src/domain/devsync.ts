@@ -53,6 +53,11 @@ export type ActivityEntry = {
   content: string
 }
 
+export type NewsEntry = ActivityEntry & {
+  projectId: string
+  projectName: string
+}
+
 export type ActivityLogPage = {
   path: string
   files: string[]
@@ -77,6 +82,10 @@ export type SystemLogEvent = {
 export type SystemLogPage = {
   path: string
   items: SystemLogEvent[]
+}
+
+export type NewsPage = {
+  items: NewsEntry[]
 }
 
 export type PlanningGanttTask = {

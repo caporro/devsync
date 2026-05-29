@@ -1227,6 +1227,47 @@ export async function getActivityLog(projectId, options = {}) {
   }
 }
 
+export async function listNewsEntries() {
+  const limit = 200
+  await ensureDataDir()
+  const entries = await fs.readdir(dataDir, { withFileTypes: true })
+  const items = []
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue
+    }
+
+    try {
+      const metadata = await getProjectMetadata(entry.name)
+      await ensureActivityLog(entry.name)
+      const files = await listActivitySegmentFiles(entry.name)
+
+      for (const fileName of files) {
+        const raw = await safeReadTextFile(activitySegmentPath(entry.name, fileName))
+        items.push(
+          ...parseActivityEntries(raw, { fileName }).map((activityEntry) => ({
+            ...activityEntry,
+            id: `${metadata.id}:${activityEntry.id}`,
+            projectId: metadata.id,
+            projectName: metadata.name,
+          }))
+        )
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return items.sort((left, right) => {
+    const byDate = left.createdAt.localeCompare(right.createdAt)
+    if (byDate !== 0) return byDate
+
+    const byProject = left.projectName.localeCompare(right.projectName)
+    return byProject !== 0 ? byProject : left.id.localeCompare(right.id)
+  }).slice(-limit)
+}
+
 export async function ensureDataDir() {
   await ensureSafeDir(vaultDir)
   await ensureSafeDir(dataDir)

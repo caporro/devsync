@@ -11,6 +11,7 @@ import type {
   FileIndexItem,
   GitActionResult,
   MyPlanItemGroup,
+  NewsPage,
   PlanningGanttData,
   PlanIndexItem,
   ProjectDetails,
@@ -437,6 +438,10 @@ export async function getAppReadme() {
 
 export async function getSystemLog(limit = 200) {
   return jsonRequest<SystemLogPage>(`/api/system-log?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export async function getNews() {
+  return jsonRequest<NewsPage>("/api/news")
 }
 
 export async function getPlanningGantt() {

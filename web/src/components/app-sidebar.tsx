@@ -22,6 +22,7 @@ import {
   ChartRingIcon,
   CropIcon,
   GitBranchIcon,
+  NewsIcon,
 } from "@hugeicons/core-free-icons"
 import type { DocsSummary, ProjectSummary } from "@/domain/devsync"
 
@@ -50,6 +51,7 @@ export function AppSidebar({
   onDocSelect,
   onOpenGit,
   onOpenMyItems,
+  onOpenNews,
   onOpenPlanning,
   onOpenReadme,
   onOpenSystemLog,
@@ -66,11 +68,12 @@ export function AppSidebar({
   isLoading?: boolean
   isDocsLoading?: boolean
   isCreateDisabled?: boolean
-  activeView?: "activity" | "artifacts" | "generated" | "plan" | "my-items" | "docs" | "git" | "readme" | string
+  activeView?: "activity" | "artifacts" | "generated" | "plan" | "my-items" | "news" | "docs" | "git" | "readme" | string
   onCreateThread?: () => void
   onDocSelect?: (docId: string) => void
   onOpenGit?: () => void
   onOpenMyItems?: () => void
+  onOpenNews?: () => void
   onOpenPlanning?: () => void
   onOpenReadme?: () => void
   onOpenSystemLog?: () => void
@@ -97,6 +100,13 @@ export function AppSidebar({
       icon: <HugeiconsIcon icon={ChartGanttIcon} strokeWidth={2} />,
       isActive: activeView === "planning",
       onSelect: onOpenPlanning,
+    },
+    {
+      title: "News",
+      url: "#",
+      icon: <HugeiconsIcon icon={NewsIcon} strokeWidth={2} />,
+      isActive: activeView === "news",
+      onSelect: onOpenNews,
     },
     {
       title: "My items",
