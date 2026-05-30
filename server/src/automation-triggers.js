@@ -1,21 +1,21 @@
-import { getWorkflowDefinition, listWorkflowDefinitions } from "./workflow-definitions.js"
-import { runWorkflow } from "./workflow-runtime.js"
+import { getAutomationDefinition, listAutomationDefinitions } from "./automation-definitions.js"
+import { runAutomation } from "./automation-runtime.js"
 import { listProjects } from "./storage.js"
 
 const runningKeys = new Set()
 const lastScheduleRuns = new Map()
 let schedulerTimer = null
 
-function eventMatches(workflow, event) {
-  if (workflow.trigger !== "event") {
+function eventMatches(automation, event) {
+  if (automation.trigger !== "event") {
     return false
   }
 
-  if (!workflow.events.length || !workflow.events.includes(event.type)) {
+  if (!automation.events.length || !automation.events.includes(event.type)) {
     return false
   }
 
-  const filter = workflow.eventFilter ?? {}
+  const filter = automation.eventFilter ?? {}
   if (filter.artifactKind && String(filter.artifactKind) !== String(event.payload?.artifactKind ?? "")) {
     return false
   }
@@ -61,7 +61,7 @@ function cronPartMatches(part, value) {
   })
 }
 
-function scheduleKey(projectId, workflowId, date = new Date()) {
+function scheduleKey(projectId, automationId, date = new Date()) {
   const stamp = [
     date.getFullYear(),
     String(date.getMonth() + 1).padStart(2, "0"),
@@ -70,21 +70,21 @@ function scheduleKey(projectId, workflowId, date = new Date()) {
     String(date.getMinutes()).padStart(2, "0"),
   ].join("")
 
-  return `${projectId}:${workflowId}:${stamp}`
+  return `${projectId}:${automationId}:${stamp}`
 }
 
-async function runTriggeredWorkflow({ workflow, projectId, reason, event, log }) {
-  const runKey = `${projectId}:${workflow.id}`
+async function runTriggeredAutomation({ automation, projectId, reason, event, log }) {
+  const runKey = `${projectId}:${automation.id}`
   if (runningKeys.has(runKey)) {
-    log?.info({ workflowId: workflow.id, projectId, reason }, "workflow trigger skipped: already running")
+    log?.info({ automationId: automation.id, projectId, reason }, "automation trigger skipped: already running")
     return
   }
 
   runningKeys.add(runKey)
   try {
-    log?.info({ workflowId: workflow.id, projectId, reason, eventType: event?.type ?? null }, "workflow trigger run starting")
-    await runWorkflow({
-      workflow,
+    log?.info({ automationId: automation.id, projectId, reason, eventType: event?.type ?? null }, "automation trigger run starting")
+    await runAutomation({
+      automation,
       projectId,
       input: [
         `Triggered by: ${reason}`,
@@ -92,30 +92,30 @@ async function runTriggeredWorkflow({ workflow, projectId, reason, event, log })
       ].filter(Boolean).join("\n"),
       log,
     })
-    log?.info({ workflowId: workflow.id, projectId, reason }, "workflow trigger run completed")
+    log?.info({ automationId: automation.id, projectId, reason }, "automation trigger run completed")
   } catch (error) {
     log?.error({
-      workflowId: workflow.id,
+      automationId: automation.id,
       projectId,
       reason,
       error: error instanceof Error ? error.message : String(error),
-    }, "workflow trigger run failed")
+    }, "automation trigger run failed")
   } finally {
     runningKeys.delete(runKey)
   }
 }
 
-export async function emitWorkflowEvent(event, log) {
+export async function emitAutomationEvent(event, log) {
   if (!event?.projectId || !event?.type) {
     return
   }
 
-  const workflows = await listWorkflowDefinitions({ projectId: event.projectId })
-  const matching = workflows.filter((workflow) => eventMatches(workflow, event))
+  const automations = await listAutomationDefinitions({ projectId: event.projectId })
+  const matching = automations.filter((automation) => eventMatches(automation, event))
 
-  for (const workflow of matching) {
-    void runTriggeredWorkflow({
-      workflow,
+  for (const automation of matching) {
+    void runTriggeredAutomation({
+      automation,
       projectId: event.projectId,
       reason: event.type,
       event,
@@ -124,58 +124,58 @@ export async function emitWorkflowEvent(event, log) {
   }
 }
 
-export function startWorkflowScheduler(log) {
+export function startAutomationScheduler(log) {
   if (schedulerTimer) {
     return
   }
 
   schedulerTimer = setInterval(() => {
-    void safeRunScheduledWorkflows(log)
+    void safeRunScheduledAutomations(log)
   }, 60_000)
-  void safeRunScheduledWorkflows(log)
+  void safeRunScheduledAutomations(log)
 }
 
-async function safeRunScheduledWorkflows(log) {
+async function safeRunScheduledAutomations(log) {
   try {
-    await runScheduledWorkflows(log)
+    await runScheduledAutomations(log)
   } catch (error) {
     log?.error({
       error: error instanceof Error ? error.message : String(error),
-    }, "workflow scheduler failed")
+    }, "automation scheduler failed")
   }
 }
 
-async function runScheduledWorkflows(log) {
+async function runScheduledAutomations(log) {
   const now = new Date()
   const projects = await listProjects()
 
   for (const project of projects) {
-    const workflows = await listWorkflowDefinitions({ projectId: project.id })
-    const scheduled = workflows.filter((workflow) => workflow.trigger === "schedule" && cronMatches(workflow.cron, now))
+    const automations = await listAutomationDefinitions({ projectId: project.id })
+    const scheduled = automations.filter((automation) => automation.trigger === "schedule" && cronMatches(automation.cron, now))
 
-    for (const workflow of scheduled) {
-      const key = scheduleKey(project.id, workflow.id, now)
+    for (const automation of scheduled) {
+      const key = scheduleKey(project.id, automation.id, now)
       if (lastScheduleRuns.has(key)) {
         continue
       }
 
       lastScheduleRuns.set(key, true)
-      void runTriggeredWorkflow({
-        workflow,
+      void runTriggeredAutomation({
+        automation,
         projectId: project.id,
-        reason: `schedule:${workflow.cron}`,
+        reason: `schedule:${automation.cron}`,
         log,
       })
     }
   }
 }
 
-export async function runWorkflowById({ workflowId, projectId, input, log }) {
-  const workflow = await getWorkflowDefinition(workflowId, { projectId })
+export async function runAutomationById({ automationId, projectId, input, log }) {
+  const automation = await getAutomationDefinition(automationId, { projectId })
 
-  if (!workflow) {
+  if (!automation) {
     return null
   }
 
-  return runWorkflow({ workflow, projectId, input, log })
+  return runAutomation({ automation, projectId, input, log })
 }

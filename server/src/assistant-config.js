@@ -154,7 +154,7 @@ function normalizeAssistantConfig() {
     model: String(model).trim(),
     tools: ["filesystem"],
     read: ["**/*"],
-    write: ["plan/**", "artifacts/**", "generated/**"],
+    write: ["plan/**", "artifacts/**", "generated/**", "automations/**"],
   }
 }
 

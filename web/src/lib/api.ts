@@ -102,7 +102,7 @@ export type AssistantRole = {
   overridesVault: boolean
 }
 
-export type WorkflowDefinition = {
+export type AutomationDefinition = {
   id: string
   key: string
   title: string
@@ -339,22 +339,22 @@ export async function deleteAssistantRole(scope: AssistantRole["scope"], slug: s
   )
 }
 
-export async function listWorkflows(projectId?: string | null) {
+export async function listAutomations(projectId?: string | null) {
   const search = new URLSearchParams()
   if (projectId) {
     search.set("projectId", projectId)
   }
 
-  return jsonRequest<{ items: WorkflowDefinition[] }>(
-    `/api/workflows${search.size ? `?${search.toString()}` : ""}`
+  return jsonRequest<{ items: AutomationDefinition[] }>(
+    `/api/automations${search.size ? `?${search.toString()}` : ""}`
   )
 }
 
-export async function runWorkflow(workflowId: string, projectId: string, input?: string) {
+export async function runAutomation(automationId: string, projectId: string, input?: string) {
   return jsonRequest<{
-    workflow: WorkflowDefinition
+    automation: AutomationDefinition
     result: { answer: string }
-  }>(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, {
+  }>(`/api/automations/${encodeURIComponent(automationId)}/runs`, {
     method: "POST",
     body: JSON.stringify({ projectId, input }),
   })

@@ -130,7 +130,7 @@ import {
   listMyPlanItems,
   listProjects,
   listUsers,
-  listWorkflows,
+  listAutomations,
   login,
   logout,
   readDocsFile,
@@ -144,14 +144,14 @@ import {
   updatePlanItemContent,
   updateProject,
   uploadArtifact,
-  runWorkflow,
+  runAutomation,
   sendAgentMessage,
   togglePlanItem,
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MyPlanItem, MyPlanItemGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
-import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, WorkflowDefinition } from "@/lib/api"
+import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
 const EMPTY_DOCS: DocsSummary[] = []
@@ -1508,8 +1508,8 @@ function ProjectRail({
   activePath,
   activeGeneratedPath,
   activePlanItemPath,
-  busyWorkflowId,
-  workflows,
+  busyAutomationId,
+  automations,
   artifacts,
   generatedFiles,
   planItems,
@@ -1523,15 +1523,15 @@ function ProjectRail({
   onAddArtifact,
   onCreateDrawing,
   onAddPlanItem,
-  onRunWorkflow,
+  onRunAutomation,
   onOpenPlan,
   onOpenPlanItem,
 }: {
   activePath: string | null
   activeGeneratedPath: string | null
   activePlanItemPath: string | null
-  busyWorkflowId: string | null
-  workflows: WorkflowDefinition[]
+  busyAutomationId: string | null
+  automations: AutomationDefinition[]
   artifacts: ProjectFile[]
   generatedFiles: ProjectFile[]
   planItems: ProjectFile[]
@@ -1545,7 +1545,7 @@ function ProjectRail({
   onAddArtifact: () => void
   onCreateDrawing: () => void
   onAddPlanItem: () => void
-  onRunWorkflow: (workflowId: string) => void
+  onRunAutomation: (automationId: string) => void
   onOpenPlan: () => void
   onOpenPlanItem: (path: string) => void
 }) {
@@ -1586,18 +1586,18 @@ function ProjectRail({
       </section>
 
       <section className="mt-6 space-y-2">
-        <div className="px-2 text-sm font-semibold text-muted-foreground">Workflows</div>
+        <div className="px-2 text-sm font-semibold text-muted-foreground">Automations</div>
         <div className="space-y-1">
-          {workflows.length === 0 ? (
+          {automations.length === 0 ? (
             <div className="px-2 py-1 text-xs text-muted-foreground">Empty</div>
           ) : (
-            workflows.map((workflow) => (
+            automations.map((automation) => (
               <button
                 className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={Boolean(busyWorkflowId)}
-                key={workflow.id}
-                onClick={() => onRunWorkflow(workflow.id)}
-                title={workflow.description || workflow.title}
+                disabled={Boolean(busyAutomationId)}
+                key={automation.id}
+                onClick={() => onRunAutomation(automation.id)}
+                title={automation.description || automation.title}
                 type="button"
               >
                 <HugeiconsIcon
@@ -1606,7 +1606,7 @@ function ProjectRail({
                   strokeWidth={2}
                 />
                 <span className="min-w-0 truncate">
-                  {busyWorkflowId === workflow.id ? "Running..." : workflow.title}
+                  {busyAutomationId === automation.id ? "Running..." : automation.title}
                 </span>
               </button>
             ))
@@ -3631,7 +3631,7 @@ function WorkspaceApp({
   const [isCreatingAgentThread, setIsCreatingAgentThread] = useState(false)
   const [isAgentSending, setIsAgentSending] = useState(false)
   const [isUploadingAgentAttachment, setIsUploadingAgentAttachment] = useState(false)
-  const [pendingWorkflowId, setPendingWorkflowId] = useState<string | null>(null)
+  const [pendingAutomationId, setPendingAutomationId] = useState<string | null>(null)
 
   const projectsQuery = useQuery({
     queryKey: ["projects"],
@@ -3707,9 +3707,9 @@ function WorkspaceApp({
     queryFn: () => listAssistantRoles(selectedProjectId),
     enabled: mainView === "agents",
   })
-  const workflowsQuery = useQuery({
-    queryKey: ["workflows", selectedProjectId ?? "global"],
-    queryFn: () => listWorkflows(selectedProjectId),
+  const automationsQuery = useQuery({
+    queryKey: ["automations", selectedProjectId ?? "global"],
+    queryFn: () => listAutomations(selectedProjectId),
     enabled: Boolean(selectedProjectId),
   })
   const agentThreadsQuery = useQuery({
@@ -4941,9 +4941,9 @@ function WorkspaceApp({
   const canWrite = Boolean(selectedProjectId) && !busyAction
   const entries = projectQuery.data?.activity?.entries ?? []
   const assistantRoles = assistantRolesQuery.data?.items ?? []
-  const workflows = workflowsQuery.data?.items ?? []
-  const pendingWorkflow = workflows.find((workflow) => workflow.id === pendingWorkflowId) ?? null
-  const busyWorkflowId = busyAction?.startsWith("workflow:") ? busyAction.slice("workflow:".length) : null
+  const automations = automationsQuery.data?.items ?? []
+  const pendingAutomation = automations.find((automation) => automation.id === pendingAutomationId) ?? null
+  const busyAutomationId = busyAction?.startsWith("automation:") ? busyAction.slice("automation:".length) : null
   const agentThreads = agentThreadsQuery.data?.items ?? []
   const agentMessages = agentThreadQuery.data?.messages ?? []
   const selectedAssistantThoughts = selectedAgentThreadId
@@ -5410,23 +5410,23 @@ function WorkspaceApp({
     })
   }
 
-  async function handleRunWorkflow(workflowId: string) {
+  async function handleRunAutomation(automationId: string) {
     if (!selectedProjectId) {
       return
     }
 
-    setPendingWorkflowId(null)
+    setPendingAutomationId(null)
     await run(
-      `workflow:${workflowId}`,
+      `automation:${automationId}`,
       async () => {
-        await runWorkflow(workflowId, selectedProjectId)
+        await runAutomation(automationId, selectedProjectId)
         await Promise.all([
           refresh(selectedProjectId),
-          queryClient.invalidateQueries({ queryKey: ["workflows", selectedProjectId] }),
+          queryClient.invalidateQueries({ queryKey: ["automations", selectedProjectId] }),
           queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId] }),
         ])
       },
-      { successMessage: "Workflow completed" }
+      { successMessage: "Automation completed" }
     )
   }
 
@@ -6261,15 +6261,15 @@ function WorkspaceApp({
                     activeGeneratedPath={selectedGeneratedPath}
 	                  activePlanItemPath={selectedPlanItemPath}
 	                  artifacts={artifacts}
-                    busyWorkflowId={busyWorkflowId}
+                    busyAutomationId={busyAutomationId}
                     generatedFiles={generated}
 	                  planItems={planItems}
 	                  view={mainView}
-                    workflows={workflows}
+                    automations={automations}
 	                  onAddArtifact={() => guardedNavigation(() => setArtifactDialogOpen(true))}
                     onCreateDrawing={handleRequestCreateDrawing}
 	                  onAddPlanItem={() => guardedNavigation(() => setPlanItemDialogOpen(true))}
-                    onRunWorkflow={setPendingWorkflowId}
+                    onRunAutomation={setPendingAutomationId}
                     onOpenConfig={() => {
                       guardedNavigation(() => {
                         setSelectedArtifactPath(null)
@@ -6391,43 +6391,43 @@ function WorkspaceApp({
           onSubmit={handlePlanItemSubmit}
           onTitleChange={setPlanItemTitle}
         />
-        <AlertDialog open={Boolean(pendingWorkflow)} onOpenChange={(open) => {
+        <AlertDialog open={Boolean(pendingAutomation)} onOpenChange={(open) => {
           if (!open) {
-            setPendingWorkflowId(null)
+            setPendingAutomationId(null)
           }
         }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Run workflow?</AlertDialogTitle>
+              <AlertDialogTitle>Run automation?</AlertDialogTitle>
               <AlertDialogDescription>
-                {pendingWorkflow
-                  ? `${pendingWorkflow.title} will run with its configured tools and file permissions.`
-                  : "This workflow will run with its configured tools and file permissions."}
+                {pendingAutomation
+                  ? `${pendingAutomation.title} will run with its configured tools and file permissions.`
+                  : "This automation will run with its configured tools and file permissions."}
               </AlertDialogDescription>
             </AlertDialogHeader>
-            {pendingWorkflow ? (
+            {pendingAutomation ? (
               <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                 <div>
                   <span className="font-medium text-foreground">Tools:</span>{" "}
-                  {pendingWorkflow.tools.length ? pendingWorkflow.tools.join(", ") : "none"}
+                  {pendingAutomation.tools.length ? pendingAutomation.tools.join(", ") : "none"}
                 </div>
                 <div>
                   <span className="font-medium text-foreground">Read:</span>{" "}
-                  {pendingWorkflow.read.length ? pendingWorkflow.read.join(", ") : "none"}
+                  {pendingAutomation.read.length ? pendingAutomation.read.join(", ") : "none"}
                 </div>
                 <div>
                   <span className="font-medium text-foreground">Write:</span>{" "}
-                  {pendingWorkflow.write.length ? pendingWorkflow.write.join(", ") : "none"}
+                  {pendingAutomation.write.length ? pendingAutomation.write.join(", ") : "none"}
                 </div>
               </div>
             ) : null}
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
-                disabled={!pendingWorkflow || Boolean(busyWorkflowId)}
+                disabled={!pendingAutomation || Boolean(busyAutomationId)}
                 onClick={() => {
-                  if (pendingWorkflow) {
-                    void handleRunWorkflow(pendingWorkflow.id)
+                  if (pendingAutomation) {
+                    void handleRunAutomation(pendingAutomation.id)
                   }
                 }}
               >

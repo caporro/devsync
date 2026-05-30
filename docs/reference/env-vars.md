@@ -60,7 +60,7 @@ The CLI vault overrides `DEVSYNC_VAULT_NAME`.
 
 | Variable | Default | Use |
 | --- | --- | --- |
-| `DEVSYNC_AGENT_MODEL` | `openai:gpt-4.1-mini` | Model for Assistant/workflows. |
+| `DEVSYNC_AGENT_MODEL` | `openai:gpt-4.1-mini` | Model for Assistant/automations. |
 | `DEVSYNC_ASSISTANT_MODEL` | empty | Assistant model override. |
 | `OPENAI_API_KEY` | empty | OpenAI/OpenAI-compatible key. |
 | `OPENAI_BASE_URL` | empty | OpenAI-compatible endpoint. |

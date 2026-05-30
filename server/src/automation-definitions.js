@@ -4,7 +4,7 @@ import path from "node:path"
 import { dataDir, vaultDir } from "./storage.js"
 import { hasFrontmatterKey, normalizeList, parseFrontmatter, readIfExists } from "./markdown-definitions.js"
 
-const globalWorkflowsDir = path.join(vaultDir, "workflows")
+const globalAutomationsDir = path.join(vaultDir, "automations")
 
 function assertProjectId(projectId) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(projectId)) {
@@ -36,7 +36,7 @@ function normalizeObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {}
 }
 
-async function loadWorkflowFile(filePath, source) {
+async function loadAutomationFile(filePath, source) {
   const raw = await readIfExists(filePath)
 
   if (!raw) {
@@ -73,11 +73,11 @@ async function loadWorkflowFile(filePath, source) {
   }
 }
 
-async function discoverFromDir(workflowRoot, source) {
+async function discoverFromDir(automationRoot, source) {
   let entries = []
 
   try {
-    entries = await fs.readdir(workflowRoot, { withFileTypes: true })
+    entries = await fs.readdir(automationRoot, { withFileTypes: true })
   } catch (error) {
     if (error.code === "ENOENT") {
       return []
@@ -86,64 +86,64 @@ async function discoverFromDir(workflowRoot, source) {
     throw error
   }
 
-  const workflows = []
+  const automations = []
   const files = entries.filter(isMarkdownFile).sort((left, right) => left.name.localeCompare(right.name))
 
   for (const entry of files) {
-    const workflow = await loadWorkflowFile(path.join(workflowRoot, entry.name), source)
+    const automation = await loadAutomationFile(path.join(automationRoot, entry.name), source)
 
-    if (workflow) {
-      workflows.push(workflow)
+    if (automation) {
+      automations.push(automation)
     }
   }
 
-  return workflows.sort((left, right) => left.title.localeCompare(right.title))
+  return automations.sort((left, right) => left.title.localeCompare(right.title))
 }
 
-export async function listWorkflowDefinitions(options = {}) {
-  const globalWorkflows = await discoverFromDir(globalWorkflowsDir, { type: "global" })
+export async function listAutomationDefinitions(options = {}) {
+  const globalAutomations = await discoverFromDir(globalAutomationsDir, { type: "global" })
 
   if (!options.projectId) {
-    return globalWorkflows
+    return globalAutomations
   }
 
   assertProjectId(options.projectId)
-  const projectWorkflows = await discoverFromDir(
-    path.join(dataDir, options.projectId, "workflows"),
+  const projectAutomations = await discoverFromDir(
+    path.join(dataDir, options.projectId, "automations"),
     { type: "project", projectId: options.projectId }
   )
 
-  return [...projectWorkflows, ...globalWorkflows]
+  return [...projectAutomations, ...globalAutomations]
 }
 
-export async function getWorkflowDefinition(workflowId, options = {}) {
-  const workflows = await listWorkflowDefinitions(options)
-  const requested = String(workflowId ?? "").trim()
+export async function getAutomationDefinition(automationId, options = {}) {
+  const automations = await listAutomationDefinitions(options)
+  const requested = String(automationId ?? "").trim()
 
   if (requested) {
-    return workflows.find((workflow) => workflow.id === requested)
-      ?? workflows.find((workflow) => workflow.key === requested)
+    return automations.find((automation) => automation.id === requested)
+      ?? automations.find((automation) => automation.key === requested)
       ?? null
   }
 
-  return workflows[0] ?? null
+  return automations[0] ?? null
 }
 
-export function formatWorkflowForApi(workflow) {
+export function formatAutomationForApi(automation) {
   return {
-    id: workflow.id,
-    key: workflow.key,
-    title: workflow.title,
-    description: workflow.description,
-    model: workflow.model,
-    tools: workflow.tools,
-    trigger: workflow.trigger,
-    cron: workflow.cron,
-    events: workflow.events,
-    eventFilter: workflow.eventFilter,
-    read: workflow.read,
-    write: workflow.write,
-    source: workflow.source.type,
-    projectId: workflow.source.projectId ?? null,
+    id: automation.id,
+    key: automation.key,
+    title: automation.title,
+    description: automation.description,
+    model: automation.model,
+    tools: automation.tools,
+    trigger: automation.trigger,
+    cron: automation.cron,
+    events: automation.events,
+    eventFilter: automation.eventFilter,
+    read: automation.read,
+    write: automation.write,
+    source: automation.source.type,
+    projectId: automation.source.projectId ?? null,
   }
 }

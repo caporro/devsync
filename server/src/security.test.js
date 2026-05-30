@@ -32,9 +32,9 @@ const { app } = await import("./index.js")
 const { resolveAgentTools } = await import("./agent-tools.js")
 const { summarizeToolPayload } = await import("./ai-logging.js")
 const {
-  diffWorkflowWriteSnapshots,
-  snapshotWorkflowWritePaths,
-} = await import("./workflow-runtime.js")
+  diffAutomationWriteSnapshots,
+  snapshotAutomationWritePaths,
+} = await import("./automation-runtime.js")
 
 after(async () => {
   await app.close()
@@ -352,6 +352,42 @@ test("custom agent write tools require declared write scope", async () => {
   )
 })
 
+test("assistant can write project automations by default", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-assistant-automations")
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/assistant?projectId=${encodeURIComponent(projectId)}`,
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.ok(response.json().write.includes("automations/**"))
+})
+
+test("automation definitions are loaded from project automations", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-automation-definitions")
+  await writeProjectFile(projectId, "automations/check.md", [
+    "---",
+    "title: Check automation",
+    "tools: []",
+    "---",
+    "",
+    "Do the check.",
+    "",
+  ].join("\n"))
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/automations?projectId=${encodeURIComponent(projectId)}`,
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json().items.map((item) => item.title), ["Check automation"])
+})
+
 test("save_generated_markdown does not overwrite existing files", async () => {
   const cookie = await login()
   const projectId = await createProject(cookie, "security-generated-unique")
@@ -388,21 +424,21 @@ test("ai tool logging summarizes payloads without raw content or secrets", () =>
   assert.doesNotMatch(serialized, /vault secret content|real-token-value|real-password/)
 })
 
-test("workflow write snapshots diff only declared write paths", async () => {
-  const root = path.join(tempRoot, "workflow-audit")
+test("automation write snapshots diff only declared write paths", async () => {
+  const root = path.join(tempRoot, "automation-audit")
   await fs.mkdir(path.join(root, "generated"), { recursive: true })
   await fs.mkdir(path.join(root, "artifacts"), { recursive: true })
   await fs.writeFile(path.join(root, "generated", "existing.md"), "before\n", "utf8")
   await fs.writeFile(path.join(root, "artifacts", "ignored.md"), "before\n", "utf8")
 
-  const before = await snapshotWorkflowWritePaths(root, ["generated/**"])
+  const before = await snapshotAutomationWritePaths(root, ["generated/**"])
 
   await fs.writeFile(path.join(root, "generated", "existing.md"), "after changed\n", "utf8")
   await fs.writeFile(path.join(root, "generated", "new.md"), "new\n", "utf8")
   await fs.writeFile(path.join(root, "artifacts", "ignored.md"), "after changed\n", "utf8")
 
-  const after = await snapshotWorkflowWritePaths(root, ["generated/**"])
-  const diff = diffWorkflowWriteSnapshots(before, after)
+  const after = await snapshotAutomationWritePaths(root, ["generated/**"])
+  const diff = diffAutomationWriteSnapshots(before, after)
 
   assert.deepEqual(diff.added, ["generated/new.md"])
   assert.deepEqual(diff.modified, ["generated/existing.md"])

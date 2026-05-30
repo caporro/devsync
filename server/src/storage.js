@@ -8,7 +8,7 @@ import { appendSystemLogEvent } from "./system-log.js"
 const PROJECT_FILE = "project.json"
 const PLANNING_FILE = "vault-plan.json"
 const LEGACY_GANTT_FILE = "gantt.json"
-const PROJECT_DIRS = ["artifacts", "logs", "generated", "plan", "roles", "workflows"]
+const PROJECT_DIRS = ["artifacts", "logs", "generated", "plan", "roles", "automations"]
 const LEGACY_ACTIVITY_LOG_FILE = "activity.md"
 const ACTIVITY_LOG_DIR = "activity"
 const ARTIFACTS_README_FILE = "readme.md"
@@ -1273,7 +1273,7 @@ export async function ensureDataDir() {
   await ensureSafeDir(dataDir)
   await ensureSafeDir(docsDir)
   await ensureSafeDir(path.join(vaultDir, "roles"))
-  await ensureSafeDir(path.join(vaultDir, "workflows"))
+  await ensureSafeDir(path.join(vaultDir, "automations"))
 }
 
 export async function getPlanningGantt() {

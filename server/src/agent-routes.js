@@ -14,11 +14,11 @@ import {
   updateAssistantRole,
 } from "./assistant-config.js"
 import {
-  formatWorkflowForApi,
-  getWorkflowDefinition,
-  listWorkflowDefinitions,
-} from "./workflow-definitions.js"
-import { runWorkflow } from "./workflow-runtime.js"
+  formatAutomationForApi,
+  getAutomationDefinition,
+  listAutomationDefinitions,
+} from "./automation-definitions.js"
+import { runAutomation } from "./automation-runtime.js"
 import {
   appendAgentMessage,
   appendAgentRunEventToThread,
@@ -70,7 +70,7 @@ const UpdateRoleBody = z.object({
   content: z.string().optional(),
 })
 
-const RunWorkflowBody = z.object({
+const RunAutomationBody = z.object({
   projectId: z.string().trim().min(1),
   input: z.string().trim().optional(),
 })
@@ -389,36 +389,36 @@ export async function registerAgentRoutes(app, auth) {
     }
   })
 
-  app.get("/api/workflows", async (request) => {
+  app.get("/api/automations", async (request) => {
     const projectId = request.query?.projectId ? String(request.query.projectId) : null
-    const workflows = await listWorkflowDefinitions({ projectId })
+    const automations = await listAutomationDefinitions({ projectId })
 
     return {
-      items: workflows.map(formatWorkflowForApi),
+      items: automations.map(formatAutomationForApi),
     }
   })
 
-  app.post("/api/workflows/:workflowId/runs", async (request, reply) => {
-    const parsed = RunWorkflowBody.safeParse(request.body ?? {})
+  app.post("/api/automations/:automationId/runs", async (request, reply) => {
+    const parsed = RunAutomationBody.safeParse(request.body ?? {})
 
     if (!parsed.success) {
       reply.code(400).send({ error: "Invalid request body", details: parsed.error.flatten() })
       return
     }
 
-    const workflow = await getWorkflowDefinition(request.params.workflowId, {
+    const automation = await getAutomationDefinition(request.params.automationId, {
       projectId: parsed.data.projectId,
     })
 
-    if (!workflow) {
-      reply.code(404).send({ error: "Workflow not found" })
+    if (!automation) {
+      reply.code(404).send({ error: "Automation not found" })
       return
     }
 
     reply.code(201).send({
-      workflow: formatWorkflowForApi(workflow),
-      result: await runWorkflow({
-        workflow,
+      automation: formatAutomationForApi(automation),
+      result: await runAutomation({
+        automation,
         projectId: parsed.data.projectId,
         input: parsed.data.input ?? "",
         log: request.log,

@@ -9,7 +9,7 @@ data/<vault>/
   vault-plan.json
   roles/
     architect.md
-  workflows/
+  automations/
     update-situation.md
   docs/
     onboarding/
@@ -21,7 +21,7 @@ data/<vault>/
       assistant.md
       roles/
         qa.md
-      workflows/
+      automations/
         daily-digest.md
       artifacts/
         readme.md
@@ -48,7 +48,7 @@ data/<vault>/
 | `assistant.md` | Global Assistant instructions. |
 | `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `artifacts/...`, `plan/...`, or `generated/...` path when the task has `projectId`. |
 | `roles/` | Global Assistant roles. |
-| `workflows/` | Global workflows. |
+| `automations/` | Global automations. |
 | `docs/` | Team documentation not tied to a single project. |
 | `projects/` | Projects. |
 | `.assistant/threads/` | Assistant chat threads and attachments. |
@@ -61,7 +61,7 @@ data/<vault>/
 | `README.md` | Main project notes. |
 | `assistant.md` | Project Assistant instructions. |
 | `roles/` | Project-specific roles. |
-| `workflows/` | Project-specific workflows. |
+| `automations/` | Project-specific automations. |
 | `artifacts/` | Project material. |
 | `plan/` | Project operating plan. |
 | `logs/` | Project logs. |
@@ -74,7 +74,7 @@ data/<vault>/
 | `artifacts/readme.md` | Artifact index. |
 | `plan/README.md` | Plan item index. |
 | `logs/activity/*` | Activity log segments. |
-| `generated/*.md` | Assistant/workflow outputs. |
+| `generated/*.md` | Assistant/automation outputs. |
 
 ## Legacy Compatibility
 

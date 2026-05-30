@@ -17,7 +17,7 @@ import {
   verifyMcpToken,
 } from "./mcp-tokens.js"
 import { checkRateLimit, recordRateLimitHit, resetRateLimit } from "./rate-limit.js"
-import { emitWorkflowEvent, startWorkflowScheduler } from "./workflow-triggers.js"
+import { emitAutomationEvent, startAutomationScheduler } from "./automation-triggers.js"
 import { listSystemLogEvents } from "./system-log.js"
 import {
   addLinkArtifact,
@@ -238,7 +238,7 @@ if (process.env.NODE_ENV !== "test") {
     app.log.warn({ gitBootstrap }, "vault git bootstrap failed")
   }
 
-  startWorkflowScheduler(app.log)
+  startAutomationScheduler(app.log)
 }
 
 app.register(fastifyMultipart, {
@@ -571,8 +571,8 @@ app.post("/api/projects/:projectId/logs", async (request, reply) => {
     const entry = await addLog(request.params.projectId, request.body ?? {})
     reply.code(201).send(entry)
 
-    if (!String(request.body?.author ?? "").startsWith("workflow:")) {
-      void emitWorkflowEvent({
+    if (!String(request.body?.author ?? "").startsWith("automation:")) {
+      void emitAutomationEvent({
         type: "project_log.added",
         projectId: request.params.projectId,
         payload: { entry },
@@ -587,7 +587,7 @@ app.post("/api/projects/:projectId/artifacts/text", async (request, reply) => {
   try {
     const artifact = await addTextArtifact(request.params.projectId, request.body ?? {})
     reply.code(201).send(artifact)
-    void emitWorkflowEvent({
+    void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
       payload: { artifact, artifactKind: "markdown" },
@@ -601,7 +601,7 @@ app.post("/api/projects/:projectId/artifacts/link", async (request, reply) => {
   try {
     const artifact = await addLinkArtifact(request.params.projectId, request.body ?? {})
     reply.code(201).send(artifact)
-    void emitWorkflowEvent({
+    void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
       payload: { artifact, artifactKind: "link" },
@@ -615,7 +615,7 @@ app.post("/api/projects/:projectId/artifacts/excalidraw", async (request, reply)
   try {
     const artifact = await addExcalidrawArtifact(request.params.projectId, request.body ?? {})
     reply.code(201).send(artifact)
-    void emitWorkflowEvent({
+    void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
       payload: { artifact, artifactKind: "excalidraw" },
@@ -632,7 +632,7 @@ app.post("/api/projects/:projectId/artifacts/upload", async (request, reply) => 
       author: file?.fields?.author?.value,
     })
     reply.code(201).send(artifact)
-    void emitWorkflowEvent({
+    void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
       payload: {
@@ -649,7 +649,7 @@ app.post("/api/projects/:projectId/plan/items", async (request, reply) => {
   try {
     const planItem = await createPlanItem(request.params.projectId, request.body ?? {})
     reply.code(201).send(planItem)
-    void emitWorkflowEvent({
+    void emitAutomationEvent({
       type: "plan_item.added",
       projectId: request.params.projectId,
       payload: { planItem },

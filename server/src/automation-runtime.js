@@ -50,7 +50,7 @@ function cleanVirtualPath(value) {
   const clean = String(value ?? "").trim().replace(/^\/+/, "").replace(/^(?:\.\/)+/, "")
 
   if (!clean || clean === "." || clean.startsWith("..") || clean.includes("/../")) {
-    throw Object.assign(new Error("Invalid workflow write path"), { statusCode: 400 })
+    throw Object.assign(new Error("Invalid automation write path"), { statusCode: 400 })
   }
 
   return clean
@@ -147,13 +147,13 @@ function resolveWritePatternRoot(scopeRoot, rawPattern) {
   const root = path.resolve(scopeRoot)
 
   if (fullPath !== root && !pathInsideRoot(root, fullPath)) {
-    throw Object.assign(new Error("Workflow write path escapes project scope"), { statusCode: 400 })
+    throw Object.assign(new Error("Automation write path escapes project scope"), { statusCode: 400 })
   }
 
   return { fullPath, mode }
 }
 
-export async function snapshotWorkflowWritePaths(scopeRoot, writePaths = []) {
+export async function snapshotAutomationWritePaths(scopeRoot, writePaths = []) {
   const entries = new Map()
 
   for (const item of writePaths) {
@@ -164,7 +164,7 @@ export async function snapshotWorkflowWritePaths(scopeRoot, writePaths = []) {
   return entries
 }
 
-export function diffWorkflowWriteSnapshots(before, after) {
+export function diffAutomationWriteSnapshots(before, after) {
   const added = []
   const modified = []
   const deleted = []
@@ -196,18 +196,18 @@ export function diffWorkflowWriteSnapshots(before, after) {
   }
 }
 
-async function appendWorkflowFileAudit({ workflow, projectId, before, after }) {
-  const diff = diffWorkflowWriteSnapshots(before, after)
+async function appendAutomationFileAudit({ automation, projectId, before, after }) {
+  const diff = diffAutomationWriteSnapshots(before, after)
 
   await appendSystemLogEvent({
-    action: "workflow.files_changed",
-    source: "workflow-runtime",
-    actor: `workflow:${workflow.key}`,
+    action: "automation.files_changed",
+    source: "automation-runtime",
+    actor: `automation:${automation.key}`,
     projectId,
-    summary: `Workflow ${workflow.key} changed ${diff.changed.length} file${diff.changed.length === 1 ? "" : "s"}`,
+    summary: `Automation ${automation.key} changed ${diff.changed.length} file${diff.changed.length === 1 ? "" : "s"}`,
     metadata: {
-      workflowId: workflow.id,
-      workflowKey: workflow.key,
+      automationId: automation.id,
+      automationKey: automation.key,
       added: diff.added,
       modified: diff.modified,
       deleted: diff.deleted,
@@ -218,72 +218,72 @@ async function appendWorkflowFileAudit({ workflow, projectId, before, after }) {
   return diff
 }
 
-async function buildSystemPrompt(workflow, projectId) {
+async function buildSystemPrompt(automation, projectId) {
   const instructionContext = await loadAssistantInstructionContext(projectId)
   const contract = [
-    `<workflow_contract>`,
-    `Allowed tools: ${workflow.tools.join(", ") || "none"}`,
+    `<automation_contract>`,
+    `Allowed tools: ${automation.tools.join(", ") || "none"}`,
     `Readable paths:`,
-    ...workflow.read.map((item) => `- /${String(item).replace(/^\/+/, "")}`),
+    ...automation.read.map((item) => `- /${String(item).replace(/^\/+/, "")}`),
     `Writable paths:`,
-    ...(workflow.write.length ? workflow.write.map((item) => `- /${String(item).replace(/^\/+/, "")}`) : ["- none"]),
+    ...(automation.write.length ? automation.write.map((item) => `- /${String(item).replace(/^\/+/, "")}`) : ["- none"]),
     `You must write only to the exact writable paths above. If the target file is not writable, stop and report the mismatch.`,
-    `</workflow_contract>`,
+    `</automation_contract>`,
   ].join("\n")
 
   return [
     `Current local time: ${localTimestamp()}.`,
     `Filesystem root mounted as virtual / is data/${vaultName}/projects/${projectId}.`,
-    "You are running a Devsync workflow, not a chat session.",
+    "You are running a Devsync automation, not a chat session.",
     "Use virtual paths only. Do not use absolute host paths.",
-    "Read only workflow-declared inputs and write only workflow-declared outputs.",
+    "Read only automation-declared inputs and write only automation-declared outputs.",
     "Preserve existing human-readable Markdown/JSON formats.",
     "Do not invent facts. Record uncertainty explicitly.",
     contract,
     instructionContext,
-    `<workflow_instructions>\n${workflow.prompt}\n</workflow_instructions>`,
+    `<automation_instructions>\n${automation.prompt}\n</automation_instructions>`,
   ].filter(Boolean).join("\n\n")
 }
 
-export async function runWorkflow({ workflow, projectId, input, log }) {
+export async function runAutomation({ automation, projectId, input, log }) {
   if (!projectId) {
-    throw Object.assign(new Error("Workflow runs require a project scope"), { statusCode: 400 })
+    throw Object.assign(new Error("Automation runs require a project scope"), { statusCode: 400 })
   }
 
   const permissions = filesystemPermissions({
-    enabled: hasFilesystemTool(workflow.tools),
-    read: workflow.read,
-    write: workflow.write,
+    enabled: hasFilesystemTool(automation.tools),
+    read: automation.read,
+    write: automation.write,
   })
   const scopeRoot = assistantScopeRoot(projectId)
-  const beforeWriteSnapshot = await snapshotWorkflowWritePaths(scopeRoot, workflow.write)
+  const beforeWriteSnapshot = await snapshotAutomationWritePaths(scopeRoot, automation.write)
 
   log?.info({
-    workflowId: workflow.id,
-    key: workflow.key,
+    automationId: automation.id,
+    key: automation.key,
     projectId,
-    model: workflow.model,
-    tools: workflow.tools,
-    read: workflow.read,
-    write: workflow.write,
+    model: automation.model,
+    tools: automation.tools,
+    read: automation.read,
+    write: automation.write,
     permissions,
     scopeRoot,
-  }, "workflow run starting")
+  }, "automation run starting")
 
   try {
-    log?.info({ workflowId: workflow.id, model: workflow.model }, "workflow resolving model")
-    const model = await resolveChatModel(workflow.model)
-    const systemPrompt = await buildSystemPrompt(workflow, projectId)
-    const tools = resolveAgentTools(workflow.tools, { projectId, read: workflow.read, write: workflow.write })
+    log?.info({ automationId: automation.id, model: automation.model }, "automation resolving model")
+    const model = await resolveChatModel(automation.model)
+    const systemPrompt = await buildSystemPrompt(automation, projectId)
+    const tools = resolveAgentTools(automation.tools, { projectId, read: automation.read, write: automation.write })
 
     log?.info({
-      workflowId: workflow.id,
+      automationId: automation.id,
       promptChars: systemPrompt.length,
       customTools: tools.map((tool) => tool.name),
-    }, "workflow runtime ready")
+    }, "automation runtime ready")
 
     const runnable = createDeepAgent({
-      name: workflow.key,
+      name: automation.key,
       model,
       systemPrompt,
       tools,
@@ -294,7 +294,7 @@ export async function runWorkflow({ workflow, projectId, input, log }) {
       permissions,
     })
 
-    log?.info({ workflowId: workflow.id }, "workflow invoking deepagent")
+    log?.info({ automationId: automation.id }, "automation invoking deepagent")
     let result
     try {
       result = await runnable.invoke(
@@ -303,7 +303,7 @@ export async function runWorkflow({ workflow, projectId, input, log }) {
             {
               role: "user",
               content: [
-                `Run workflow "${workflow.title}".`,
+                `Run automation "${automation.title}".`,
                 input ? `Runtime input:\n${input}` : "",
                 "Return a concise summary of what changed.",
               ].filter(Boolean).join("\n\n"),
@@ -311,42 +311,42 @@ export async function runWorkflow({ workflow, projectId, input, log }) {
           ],
         },
         {
-          callbacks: log ? [new AiToolLogHandler(log, { workflowId: workflow.id, projectId })] : [],
+          callbacks: log ? [new AiToolLogHandler(log, { automationId: automation.id, projectId })] : [],
         }
       )
     } finally {
-      await appendWorkflowFileAudit({
-        workflow,
+      await appendAutomationFileAudit({
+        automation,
         projectId,
         before: beforeWriteSnapshot,
-        after: await snapshotWorkflowWritePaths(scopeRoot, workflow.write),
+        after: await snapshotAutomationWritePaths(scopeRoot, automation.write),
       })
     }
 
     const answer = contentToText(result.messages?.at(-1)?.content).trim()
-      || "Workflow completed."
+      || "Automation completed."
 
     log?.info({
-      workflowId: workflow.id,
+      automationId: automation.id,
       answerChars: answer.length,
-    }, "workflow deepagent completed")
+    }, "automation deepagent completed")
 
     await addLog(projectId, {
-      author: `workflow:${workflow.key}`,
+      author: `automation:${automation.key}`,
       content: answer,
     })
 
-    log?.info({ workflowId: workflow.id }, "workflow activity log appended")
+    log?.info({ automationId: automation.id }, "automation activity log appended")
 
     return {
       answer,
     }
   } catch (error) {
     log?.error({
-      workflowId: workflow.id,
+      automationId: automation.id,
       projectId,
       error: safeError(error),
-    }, "workflow run failed")
+    }, "automation run failed")
     throw error
   }
 }
