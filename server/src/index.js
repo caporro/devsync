@@ -18,6 +18,7 @@ import {
 } from "./mcp-tokens.js"
 import { checkRateLimit, recordRateLimitHit, resetRateLimit } from "./rate-limit.js"
 import { emitAutomationEvent, startAutomationScheduler } from "./automation-triggers.js"
+import { listMentionInbox, markInboxRead } from "./mentions.js"
 import { listSystemLogEvents } from "./system-log.js"
 import {
   addLinkArtifact,
@@ -350,6 +351,24 @@ app.get("/api/my/plan-items", async (request, reply) => {
     )
 
     reply.send({ items: groups.filter(Boolean) })
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.get("/api/my/inbox", async (request, reply) => {
+  try {
+    const user = auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }
+    reply.send(await listMentionInbox(user, { limit: request.query.limit }))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.post("/api/my/inbox/read", async (request, reply) => {
+  try {
+    const user = auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }
+    reply.send(await markInboxRead(user, request.body ?? {}))
   } catch (error) {
     sendError(reply, error)
   }

@@ -88,6 +88,27 @@ export type NewsPage = {
   items: NewsEntry[]
 }
 
+export type MentionInboxItem = {
+  id: string
+  actor: string | null
+  content: string | null
+  createdAt: string
+  label: string
+  projectId: string | null
+  summary: string | null
+  target: string | null
+  targetType: string
+  unread: boolean
+  userId: string
+}
+
+export type MentionInboxPage = {
+  items: MentionInboxItem[]
+  lastReadAt: string | null
+  unreadCount: number
+  userId: string
+}
+
 export type PlanningGanttTask = {
   id?: string | number
   start?: string

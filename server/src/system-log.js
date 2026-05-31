@@ -4,7 +4,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 const dataRootDir = path.resolve(process.env.DEVSYNC_DATA_ROOT ?? path.join(process.cwd(), "data"))
-const systemLogDir = path.join(dataRootDir, "system-log")
+const systemLogDir = path.join(dataRootDir, "system")
 const systemLogFile = path.join(systemLogDir, "events.ndjson")
 
 function nowIso() {

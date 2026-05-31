@@ -10,6 +10,7 @@ import type {
   DocsSummary,
   FileIndexItem,
   GitActionResult,
+  MentionInboxPage,
   MyPlanItemGroup,
   NewsPage,
   PlanningGanttData,
@@ -214,6 +215,17 @@ export async function listUsers() {
 
 export async function listMyPlanItems() {
   return jsonRequest<{ items: MyPlanItemGroup[] }>("/api/my/plan-items")
+}
+
+export async function listMyInbox() {
+  return jsonRequest<MentionInboxPage>("/api/my/inbox")
+}
+
+export async function markMyInboxRead() {
+  return jsonRequest<{ lastReadAt: string }>("/api/my/inbox/read", {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
 }
 
 export async function login(email: string, password: string) {

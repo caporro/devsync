@@ -41,6 +41,10 @@ import {
   fileCommandIcon,
   fileMarkdown,
   groupCommandMenuItems,
+  userCommandIcon,
+  userMarkdown,
+  userMentionId,
+  userMentionLabel,
 } from "@/components/file-command-menu-utils"
 import type { CommandMenuItem } from "@/components/file-command-menu-utils"
 import type { MarkdownArtifactEditorActions, MarkdownArtifactEditorStatus } from "@/components/markdown-artifact-editor"
@@ -123,6 +127,7 @@ import {
   getProject,
   getProjectActivity,
   getSystemLog,
+  listMyInbox,
   listAssistantRoles,
   listAgentThreads,
   listDocs,
@@ -133,6 +138,7 @@ import {
   listAutomations,
   login,
   logout,
+  markMyInboxRead,
   readDocsFile,
   readFile,
   updateArtifactIndex,
@@ -150,7 +156,7 @@ import {
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MyPlanItem, MyPlanItemGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
+import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyPlanItem, MyPlanItemGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
 import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
@@ -184,7 +190,7 @@ const PlanningView = lazy(() =>
   }))
 )
 
-type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "plan" | "plan-item" | "my-items" | "news" | "docs" | "git" | "planning"
+type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "plan" | "plan-item" | "my-items" | "inbox" | "news" | "docs" | "git" | "planning"
 type AppRoute = {
   mainView: MainView
   projectId: string | null
@@ -222,6 +228,17 @@ function markdownProjectFilePath(url: string) {
     .replace(/^(?:\.\.\/)+/, "")
 
   return /^(?:artifacts|generated|plan)\//.test(normalized) ? normalized : null
+}
+
+function markdownUserMentionId(url: string) {
+  const match = String(url ?? "").match(/^devsync:user:([^ \t\r\n]+)$/)
+  if (!match) return null
+
+  try {
+    return decodeURIComponent(match[1]).trim().toLowerCase() || null
+  } catch {
+    return match[1].trim().toLowerCase() || null
+  }
 }
 
 function decodeMarkdownLabel(value: string) {
@@ -405,6 +422,10 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     return emptyRoute("my-items")
   }
 
+  if (parts[0] === "inbox") {
+    return emptyRoute("inbox")
+  }
+
   if (parts[0] === "news") {
     return emptyRoute("news")
   }
@@ -448,6 +469,10 @@ function buildAppPath(route: AppRoute) {
 
   if (route.mainView === "my-items") {
     return "/my-items"
+  }
+
+  if (route.mainView === "inbox") {
+    return "/inbox"
   }
 
   if (route.mainView === "news") {
@@ -616,7 +641,7 @@ function SystemLogView({
     <section className="mx-auto w-full max-w-5xl">
       <div className="mb-4">
         <h1 className="text-xl font-semibold text-foreground">System Log</h1>
-        <div className="mt-1 text-xs text-muted-foreground">{path ?? "system-log/events.ndjson"}</div>
+        <div className="mt-1 text-xs text-muted-foreground">{path ?? "system/events.ndjson"}</div>
       </div>
       {isLoading ? (
         <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">Loading...</div>
@@ -1129,15 +1154,16 @@ function pushInlineText(nodes: ReactNode[], text: string, keyPrefix: string) {
 }
 
 function parseMarkdownLinkToken(token: string) {
-  const match = token.match(/^(!?)\[([^\]\n]*)\]\(([^)\n]+)\)$/)
+  const match = token.match(/^(@)?(!?)\[([^\]\n]*)\]\(([^)\n]+)\)$/)
   if (!match) {
     return null
   }
 
   return {
-    image: Boolean(match[1]),
-    label: match[2],
-    url: markdownLinkUrl(match[3]),
+    image: Boolean(match[2]),
+    label: match[3],
+    mentionSyntax: Boolean(match[1]),
+    url: markdownLinkUrl(match[4]),
   }
 }
 
@@ -1150,7 +1176,7 @@ function renderInlineMarkdown(
   keyPrefix = "inline"
 ): ReactNode[] {
   const nodes: ReactNode[] = []
-  const pattern = /(`[^`\n]+`)|(!?\[[^\]\n]*\]\([^)]+\))|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)/g
+  const pattern = /(`[^`\n]+`)|(@?!?\[[^\]\n]*\]\([^)]+\))|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -1168,11 +1194,18 @@ function renderInlineMarkdown(
         </code>
       )
     } else if (link) {
+      const mentionUserId = markdownUserMentionId(link.url)
       const projectPath = markdownProjectFilePath(link.url)
       const label = markdownLinkDisplayName(link.label, link.url)
       const className = cn("underline underline-offset-2", options.linkClassName)
 
-      if (projectPath && options.onOpenProjectFile) {
+      if (mentionUserId) {
+        nodes.push(
+          <span className="font-medium text-primary" key={key}>
+            @{label || mentionUserId}
+          </span>
+        )
+      } else if (projectPath && options.onOpenProjectFile) {
         nodes.push(
           <a
             className={className}
@@ -1222,15 +1255,18 @@ function renderInlineMarkdown(
 
 function renderComposerDisplayText(value: string) {
   const nodes: ReactNode[] = []
-  const pattern = /!?\[([^\]\n]*)\]\(([^)\n]+)\)/g
+  const pattern = /@?!?\[([^\]\n]*)\]\(([^)\n]+)\)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
   while ((match = pattern.exec(value))) {
     pushInlineText(nodes, value.slice(lastIndex, match.index), `composer-text-${match.index}`)
+    const mentionUserId = markdownUserMentionId(markdownLinkUrl(match[2]))
     nodes.push(
       <span className="underline underline-offset-2" key={`composer-link-${match.index}`}>
-        {markdownLinkDisplayName(match[1], match[2])}
+        {mentionUserId
+          ? `@${decodeMarkdownLabel(match[1]).trim() || mentionUserId}`
+          : markdownLinkDisplayName(match[1], match[2])}
       </span>
     )
     lastIndex = pattern.lastIndex
@@ -1425,7 +1461,7 @@ function artifactPathFromActivityHref(href: string) {
 
 function renderActivityContent(content: string, onOpenArtifact: (path: string) => void) {
   const nodes = []
-  const matcher = /\[([^\]]+)\]\(([^)]+)\)/g
+  const matcher = /@?\[([^\]]+)\]\(([^)]+)\)/g
   let lastIndex = 0
   let match
 
@@ -1437,7 +1473,14 @@ function renderActivityContent(content: string, onOpenArtifact: (path: string) =
     }
 
     const artifactPath = artifactPathFromActivityHref(href)
-    if (artifactPath) {
+    const mentionUserId = markdownUserMentionId(markdownLinkUrl(href))
+    if (mentionUserId) {
+      nodes.push(
+        <span className="font-medium text-primary" key={`${match.index}-${href}`}>
+          @{decodeMarkdownLabel(label).trim() || mentionUserId}
+        </span>
+      )
+    } else if (artifactPath) {
       nodes.push(
         <a
           className="font-medium text-primary underline underline-offset-2"
@@ -1794,6 +1837,7 @@ function DocsRail({
 function AssistantChatView({
   bottomRef,
   commandFiles,
+  commandUsers,
   draft,
   error,
   input,
@@ -1823,6 +1867,7 @@ function AssistantChatView({
 }: {
   bottomRef: RefObject<HTMLDivElement | null>
   commandFiles: ProjectFile[]
+  commandUsers: AuthUser[]
   draft: string
   error: string | null
   input: string
@@ -1890,12 +1935,11 @@ function AssistantChatView({
       query: token.query,
     })
   }, [closeFileMenu])
-  const insertFileMention = useCallback((file: ProjectFile) => {
+  const insertCommandMention = useCallback((markdown: string) => {
     const element = textareaRef.current
     const currentValue = element?.value ?? input
     const cursor = element?.selectionStart ?? currentValue.length
     const token = fileMentionTokenAt(currentValue, cursor)
-    const markdown = fileMarkdown(file, { embedImages: false, label: "name" })
     const nextValue = token
       ? `${currentValue.slice(0, token.start)}${markdown}${currentValue.slice(token.end)}`
       : `${currentValue}${markdown}`
@@ -1914,22 +1958,33 @@ function AssistantChatView({
   }, [closeFileMenu, input, onInputChange])
   const filteredFileItems = useMemo(() => {
     const query = fileMenu.query.trim().toLowerCase()
-    const items = commandFiles.map<CommandMenuItem>((file) => ({
-      group: "files",
-      groupLabel: "Files",
-      icon: fileCommandIcon(file),
-      id: `file:${file.path}`,
-      label: file.title?.trim() || file.name,
-      onRun: () => insertFileMention(file),
-      subtitle: file.path,
-    }))
+    const items = [
+      ...commandUsers.map<CommandMenuItem>((user) => ({
+        group: "users",
+        groupLabel: "Users",
+        icon: userCommandIcon(),
+        id: `user:${userMentionId(user)}`,
+        label: userMentionLabel(user),
+        onRun: () => insertCommandMention(userMarkdown(user)),
+        subtitle: user.email || user.username,
+      })),
+      ...commandFiles.map<CommandMenuItem>((file) => ({
+        group: "files",
+        groupLabel: "Files",
+        icon: fileCommandIcon(file),
+        id: `file:${file.path}`,
+        label: file.title?.trim() || file.name,
+        onRun: () => insertCommandMention(fileMarkdown(file, { embedImages: false, label: "name" })),
+        subtitle: file.path,
+      })),
+    ]
 
     if (!query) return items
 
     return items.filter((item) =>
       `${item.label} ${item.subtitle ?? ""}`.toLowerCase().includes(query)
     )
-  }, [commandFiles, fileMenu.query, insertFileMention])
+  }, [commandFiles, commandUsers, fileMenu.query, insertCommandMention])
   const fileMenuGroups = useMemo(
     () => groupCommandMenuItems(filteredFileItems),
     [filteredFileItems]
@@ -2549,6 +2604,75 @@ function MyItemsView({
   )
 }
 
+function InboxView({
+  isLoading,
+  isMarkingRead,
+  items,
+  unreadCount,
+  onMarkRead,
+  onOpenItem,
+}: {
+  isLoading: boolean
+  isMarkingRead: boolean
+  items: MentionInboxItem[]
+  unreadCount: number
+  onMarkRead: () => void
+  onOpenItem: (item: MentionInboxItem) => void
+}) {
+  return (
+    <section className="mx-auto max-w-3xl">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">Inbox</h1>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {isLoading ? "Loading..." : `${items.length} mention${items.length === 1 ? "" : "s"} / ${unreadCount} unread`}
+          </div>
+        </div>
+        <Button disabled={isMarkingRead || unreadCount === 0} onClick={onMarkRead} type="button" variant="outline">
+          Mark read
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="text-sm text-muted-foreground">Loading...</div>
+      ) : items.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+          No mentions.
+        </div>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border bg-card">
+          {items.map((item) => (
+            <button
+              className={cn(
+                "flex w-full min-w-0 items-start gap-3 px-3 py-2 text-left hover:bg-muted/60",
+                item.unread && "bg-primary/5"
+              )}
+              key={item.id}
+              onClick={() => onOpenItem(item)}
+              type="button"
+            >
+              <span className={cn("mt-2 size-2 shrink-0 rounded-full", item.unread ? "bg-primary" : "bg-transparent")} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-foreground">
+                  {item.summary ?? `Mentioned ${item.label}`}
+                </span>
+                {item.content ? (
+                  <span className="mt-1 block whitespace-pre-wrap text-sm leading-5 text-foreground">
+                    {item.content}
+                  </span>
+                ) : null}
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                  {formatActivityDate(item.createdAt)} - {item.projectId ?? "global"} - {item.target ?? item.targetType}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function NewsView({
   bottomRef,
   entries,
@@ -2937,6 +3061,7 @@ function ArtifactView({
   projectId,
   artifact,
   commandFiles,
+  commandUsers,
   onDelete,
   onDirtyChange,
   onDrawingActionsChange,
@@ -2955,6 +3080,7 @@ function ArtifactView({
   projectId: string
   artifact: ProjectFile
   commandFiles: ProjectFile[]
+  commandUsers: AuthUser[]
   onDelete: (path: string) => void
   onDirtyChange: (path: string, dirty: boolean) => void
   onDrawingActionsChange: (actions: ExcalidrawArtifactActions | null) => void
@@ -3020,6 +3146,7 @@ function ArtifactView({
         isLoading={false}
         isSaving={isSaving}
         commandFiles={commandFiles}
+        commandUsers={commandUsers}
         path={artifact.name}
         title={artifact.name}
         onDelete={() => onDelete(artifact.path)}
@@ -3650,6 +3777,11 @@ function WorkspaceApp({
     queryFn: listMyPlanItems,
     enabled: mainView === "my-items",
   })
+  const inboxQuery = useQuery({
+    queryKey: ["my-inbox"],
+    queryFn: listMyInbox,
+    enabled: mainView === "inbox",
+  })
   const newsQuery = useQuery({
     queryKey: ["news"],
     queryFn: getNews,
@@ -3667,6 +3799,15 @@ function WorkspaceApp({
     ).sort(),
     [currentUser, usersQuery.data?.users]
   )
+  const commandUsers = useMemo(() => {
+    const seen = new Set<string>()
+    return (usersQuery.data?.users ?? [currentUser]).filter((user) => {
+      const id = userMentionId(user)
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+  }, [currentUser, usersQuery.data?.users])
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null
   const projectQuery = useQuery({
     queryKey: ["project", selectedProjectId],
@@ -3750,7 +3891,7 @@ function WorkspaceApp({
   }, [])
 
   useEffect(() => {
-    const needsProject = !["agents", "docs", "git", "my-items", "news", "planning", "readme", "system-log"].includes(mainView)
+    const needsProject = !["agents", "docs", "git", "my-items", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)
     if (needsProject && !selectedProjectId && projects.length > 0) {
       return
     }
@@ -3786,7 +3927,7 @@ function WorkspaceApp({
   ])
 
   useEffect(() => {
-    if (["agents", "docs", "git", "my-items", "news", "planning", "readme", "system-log"].includes(mainView)) {
+    if (["agents", "docs", "git", "my-items", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)) {
       return
     }
 
@@ -4980,12 +5121,11 @@ function WorkspaceApp({
       query: token.query,
     })
   }, [closeLogFileMenu])
-  const insertLogFileMention = useCallback((file: ProjectFile) => {
+  const insertLogCommandMention = useCallback((markdown: string) => {
     const element = logTextareaRef.current
     const currentValue = element?.value ?? logContent
     const cursor = element?.selectionStart ?? currentValue.length
     const token = fileMentionTokenAt(currentValue, cursor)
-    const markdown = fileMarkdown(file, { embedImages: false })
     const nextValue = token
       ? `${currentValue.slice(0, token.start)}${markdown}${currentValue.slice(token.end)}`
       : `${currentValue}${markdown}`
@@ -5003,22 +5143,33 @@ function WorkspaceApp({
   }, [closeLogFileMenu, logContent])
   const filteredLogFileItems = useMemo(() => {
     const query = logFileMenu.query.trim().toLowerCase()
-    const items = markdownCommandFiles.map<CommandMenuItem>((file) => ({
-      group: "files",
-      groupLabel: "Files",
-      icon: fileCommandIcon(file),
-      id: `file:${file.path}`,
-      label: file.title?.trim() || file.name,
-      onRun: () => insertLogFileMention(file),
-      subtitle: file.path,
-    }))
+    const items = [
+      ...commandUsers.map<CommandMenuItem>((user) => ({
+        group: "users",
+        groupLabel: "Users",
+        icon: userCommandIcon(),
+        id: `user:${userMentionId(user)}`,
+        label: userMentionLabel(user),
+        onRun: () => insertLogCommandMention(userMarkdown(user)),
+        subtitle: user.email || user.username,
+      })),
+      ...markdownCommandFiles.map<CommandMenuItem>((file) => ({
+        group: "files",
+        groupLabel: "Files",
+        icon: fileCommandIcon(file),
+        id: `file:${file.path}`,
+        label: file.title?.trim() || file.name,
+        onRun: () => insertLogCommandMention(fileMarkdown(file, { embedImages: false })),
+        subtitle: file.path,
+      })),
+    ]
 
     if (!query) return items
 
     return items.filter((item) =>
       `${item.label} ${item.subtitle ?? ""}`.toLowerCase().includes(query)
     )
-  }, [insertLogFileMention, logFileMenu.query, markdownCommandFiles])
+  }, [commandUsers, insertLogCommandMention, logFileMenu.query, markdownCommandFiles])
   const logFileMenuGroups = useMemo(
     () => groupCommandMenuItems(filteredLogFileItems),
     [filteredLogFileItems]
@@ -5103,10 +5254,23 @@ function WorkspaceApp({
         setPlaceholderTitle("")
         setMainView("plan-item")
       }, { mainView: "plan-item", planItemPath: normalized })
+      return
+    }
+
+    if (normalized.startsWith("logs/")) {
+      guardedNavigation(() => {
+        setSelectedProjectId(targetProjectId)
+        setSelectedArtifactPath(null)
+        setSelectedGeneratedPath(null)
+        setSelectedPlanItemPath(null)
+        setPlaceholderTitle("")
+        setMainView("activity")
+      })
     }
   }
 
   const myItemGroups = myItemsQuery.data?.items ?? []
+  const inboxItems = inboxQuery.data?.items ?? []
   const newsEntries = newsQuery.data?.items ?? []
   const docFiles = docsFolder?.files ?? EMPTY_FILES
   const selectedArtifact = artifacts.find((file) => file.path === selectedArtifactPath) ?? null
@@ -5126,7 +5290,7 @@ function WorkspaceApp({
   const drawingFullscreenActive = selectedArtifactIsExcalidraw && drawingFullscreen
   const planningFullscreenActive = mainView === "planning" && planningFullscreen
   const immersiveViewActive = drawingFullscreenActive || planningFullscreenActive
-  const isGlobalView = ["docs", "git", "my-items", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
+  const isGlobalView = ["docs", "git", "my-items", "inbox", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
   const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedPlanItem
   const artifactQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedArtifactPath],
@@ -5398,6 +5562,21 @@ function WorkspaceApp({
     })
   }
 
+  function handleOpenInboxItem(item: MentionInboxItem) {
+    if (!item.projectId) {
+      return
+    }
+
+    handleOpenProjectFileLink(item.target ?? "", item.projectId)
+  }
+
+  async function handleMarkInboxRead() {
+    await run("inbox-read", async () => {
+      await markMyInboxRead()
+      await queryClient.invalidateQueries({ queryKey: ["my-inbox"] })
+    })
+  }
+
   async function handleToggleMyPlanItem(item: MyPlanItem, done: boolean) {
     await run("my-plan-item", async () => {
       const saved = await togglePlanItem(item.projectId, item.path, done)
@@ -5503,6 +5682,18 @@ function WorkspaceApp({
               setMainView("my-items")
             })
           }}
+          onOpenInbox={() => {
+            guardedNavigation(() => {
+              setSelectedDocId(null)
+              setSelectedProjectId(null)
+              setSelectedArtifactPath(null)
+              setSelectedGeneratedPath(null)
+              setSelectedPlanItemPath(null)
+              setSelectedDocFilePath(null)
+              setPlaceholderTitle("")
+              setMainView("inbox")
+            })
+          }}
           onOpenNews={() => {
             guardedNavigation(() => {
               setSelectedDocId(null)
@@ -5598,6 +5789,8 @@ function WorkspaceApp({
                       ? "System Log"
                     : mainView === "news"
                       ? "News"
+                    : mainView === "inbox"
+                      ? "Inbox"
                     : mainView === "my-items"
                       ? "My items"
                     : mainView === "planning"
@@ -5898,6 +6091,7 @@ function WorkspaceApp({
                     <AssistantChatView
                       bottomRef={assistantBottomRef}
                       commandFiles={markdownCommandFiles}
+                      commandUsers={commandUsers}
                       draft={agentDraft}
                       error={agentError}
                       input={agentInput}
@@ -5947,6 +6141,15 @@ function WorkspaceApp({
                       isSaving={busyAction === "my-plan-item"}
                       onOpenItem={handleOpenMyPlanItem}
                       onToggleItem={(item, done) => void handleToggleMyPlanItem(item, done)}
+                    />
+                  ) : mainView === "inbox" ? (
+                    <InboxView
+                      isLoading={inboxQuery.isLoading}
+                      isMarkingRead={busyAction === "inbox-read"}
+                      items={inboxItems}
+                      unreadCount={inboxQuery.data?.unreadCount ?? 0}
+                      onMarkRead={() => void handleMarkInboxRead()}
+                      onOpenItem={handleOpenInboxItem}
                     />
                   ) : mainView === "planning" ? (
                     <PlanningView
@@ -6039,6 +6242,7 @@ function WorkspaceApp({
                           isLoading={false}
                           isSaving={busyAction === "planItem-content"}
                           commandFiles={markdownCommandFiles}
+                          commandUsers={commandUsers}
                           path={selectedPlanItem.name}
                           title={selectedPlanItem.name}
                           onDelete={() => handleDeletePlanItem(selectedPlanItem.path)}
@@ -6090,6 +6294,7 @@ function WorkspaceApp({
                           isLoading={false}
                           isSaving={busyAction === "generated-content"}
                           commandFiles={markdownCommandFiles}
+                          commandUsers={commandUsers}
                           path={selectedGenerated.name}
                           title={selectedGenerated.name}
                           onOpenProjectFile={handleOpenProjectFileLink}
@@ -6135,6 +6340,7 @@ function WorkspaceApp({
                     <ArtifactView
                       artifact={selectedArtifact}
                       commandFiles={markdownCommandFiles}
+                      commandUsers={commandUsers}
                       content={artifactQuery.data}
                       isLoading={artifactQuery.isLoading}
                       isSaving={busyAction === "artifact-content" || busyAction === "excalidraw-content"}

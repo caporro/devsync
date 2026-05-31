@@ -227,7 +227,8 @@ Default Docker paths:
 ```txt
 /data/devsync-vault/
 /data/auth/
-/data/system-log/
+/data/system/
+/data/users/
 ```
 
 Layout:
@@ -439,9 +440,23 @@ System Log records events such as:
 - project creation;
 - metadata changes;
 - artifact creation;
+- mention creation;
 - automation runs;
 - git pull/push;
 - role changes.
+
+Mentions use Markdown links:
+
+```md
+@[Claudio](devsync:user:claudio)
+```
+
+Mention notifications are stored as `mention.created` events in `data/system/events.ndjson`.
+Unread state is per user only:
+
+```txt
+data/users/<userId>/inbox-state.json
+```
 
 Recommended upgrade flow:
 

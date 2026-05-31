@@ -53,13 +53,17 @@ import {
   fileCommandIcon,
   fileMarkdown,
   groupCommandMenuItems,
+  userCommandIcon,
+  userMarkdown,
+  userMentionId,
+  userMentionLabel,
 } from "@/components/file-command-menu-utils"
-import type { CommandMenuItem, MarkdownCommandFile } from "@/components/file-command-menu-utils"
+import type { CommandMenuItem, MarkdownCommandFile, MarkdownCommandUser } from "@/components/file-command-menu-utils"
 import { cn } from "@/lib/utils"
-import { markdownProjectFilePath, safeMarkdownHref } from "@/lib/markdown-safety"
+import { markdownProjectFilePath, markdownUserMentionId, safeMarkdownHref } from "@/lib/markdown-safety"
 import "@/styles/milkdown-theme.css"
 
-export type { MarkdownCommandFile } from "@/components/file-command-menu-utils"
+export type { MarkdownCommandFile, MarkdownCommandUser } from "@/components/file-command-menu-utils"
 
 export type CrepeMarkdownEditorHandle = {
   getMarkdown: () => string
@@ -70,6 +74,7 @@ export type CrepeMarkdownEditorHandle = {
 type CrepeMarkdownEditorProps = {
   className?: string
   commandFiles?: MarkdownCommandFile[]
+  commandUsers?: MarkdownCommandUser[]
   editable: boolean
   editorKey: string
   initialValue: string
@@ -153,6 +158,12 @@ function handleProjectLinkPointer(
     return true
   }
 
+  if (markdownUserMentionId(safeHref)) {
+    event.preventDefault()
+    event.stopPropagation()
+    return true
+  }
+
   const path = projectFilePathFromHref(safeHref)
   if (!path || !onOpenProjectFile) return false
 
@@ -184,6 +195,7 @@ function isImageResizeHandleTarget(target: EventTarget | null) {
 function CrepeMarkdownBody({
   className,
   commandFiles = [],
+  commandUsers = [],
   crepeRef,
   editable,
   editorKey,
@@ -534,15 +546,26 @@ function CrepeMarkdownBody({
             label: command.label,
             onRun: () => runSlashCommand(command.id),
           }))
-        : commandFiles.map<CommandMenuItem>((file) => ({
-            group: "files",
-            groupLabel: "Files",
-            icon: fileCommandIcon(file),
-            id: `file:${file.path}`,
-            label: file.title?.trim() || file.name,
-            onRun: () => insertFileMarkdown(fileMarkdown(file)),
-            subtitle: file.path,
-          }))
+        : [
+            ...commandUsers.map<CommandMenuItem>((user) => ({
+              group: "users",
+              groupLabel: "Users",
+              icon: userCommandIcon(),
+              id: `user:${userMentionId(user)}`,
+              label: userMentionLabel(user),
+              onRun: () => insertFileMarkdown(userMarkdown(user)),
+              subtitle: user.email || user.username,
+            })),
+            ...commandFiles.map<CommandMenuItem>((file) => ({
+              group: "files",
+              groupLabel: "Files",
+              icon: fileCommandIcon(file),
+              id: `file:${file.path}`,
+              label: file.title?.trim() || file.name,
+              onRun: () => insertFileMarkdown(fileMarkdown(file)),
+              subtitle: file.path,
+            })),
+          ]
 
     if (!query) return items
 
@@ -551,6 +574,7 @@ function CrepeMarkdownBody({
     )
   }, [
     commandFiles,
+    commandUsers,
     insertFileMarkdown,
     runSlashCommand,
     slashMenu.query,
@@ -676,6 +700,12 @@ function CrepeMarkdownBody({
         return
       }
 
+      if (markdownUserMentionId(safeHref)) {
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+
       const path = projectFilePathFromHref(safeHref)
       if (!path || !onOpenProjectFileRef.current) return
 
@@ -775,6 +805,7 @@ export const CrepeMarkdownEditor = forwardRef<
   {
     className,
     commandFiles,
+    commandUsers,
     editable,
     editorKey,
     initialValue,
@@ -844,6 +875,7 @@ export const CrepeMarkdownEditor = forwardRef<
       <CrepeMarkdownBody
         className={className}
         commandFiles={commandFiles}
+        commandUsers={commandUsers}
         crepeRef={crepeRef}
         editable={editable}
         editorKey={editorKey}

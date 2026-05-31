@@ -4,6 +4,7 @@ import { CrepeMarkdownEditor } from "@/components/crepe-markdown-editor"
 import type {
   CrepeMarkdownEditorHandle,
   MarkdownCommandFile,
+  MarkdownCommandUser,
 } from "@/components/crepe-markdown-editor"
 import { sanitizeMarkdownLinks } from "@/lib/markdown-safety"
 
@@ -28,6 +29,7 @@ export type MarkdownArtifactEditorStatus = {
 
 type MarkdownArtifactEditorProps = {
   commandFiles?: MarkdownCommandFile[]
+  commandUsers?: MarkdownCommandUser[]
   content: string | undefined
   isLoading: boolean
   isSaving: boolean
@@ -157,6 +159,7 @@ export function MarkdownArtifactEditor({
 
 function LoadedMarkdownArtifactEditor({
   commandFiles,
+  commandUsers,
   content,
   isSaving,
   path,
@@ -332,6 +335,7 @@ function LoadedMarkdownArtifactEditor({
             ref={editorRef}
             className="devsync-crepe-editor--tall"
             commandFiles={commandFiles}
+            commandUsers={commandUsers}
             editable={canEdit}
             editorKey={path}
             initialValue={currentContent}

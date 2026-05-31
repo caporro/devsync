@@ -33,6 +33,19 @@ export function markdownProjectFilePath(url: string) {
   return /^(?:artifacts|generated|plan)\//.test(normalized) ? normalized : null
 }
 
+export function markdownUserMentionId(url: string) {
+  const match = String(url ?? "").match(/^devsync:user:([^ \t\r\n]+)$/)
+  if (!match) {
+    return null
+  }
+
+  try {
+    return decodeURIComponent(match[1]).trim().toLowerCase() || null
+  } catch {
+    return match[1].trim().toLowerCase() || null
+  }
+}
+
 export function safeMarkdownHref(value: string) {
   const href = markdownUrlToken(value)
   if (!href || hasUnsafeHrefCharacter(href)) {
@@ -42,6 +55,10 @@ export function safeMarkdownHref(value: string) {
   const projectPath = markdownProjectFilePath(href)
   if (projectPath) {
     return projectPath
+  }
+
+  if (markdownUserMentionId(href)) {
+    return href
   }
 
   try {

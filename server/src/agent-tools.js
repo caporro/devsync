@@ -16,6 +16,7 @@ import {
   togglePlanItem,
   updatePlanItem,
 } from "./storage.js"
+import { appendMentionEvents } from "./mentions.js"
 import { appendSystemLogEvent } from "./system-log.js"
 
 const ACTIVITY_INLINE_MAX_CHARS = Number(process.env.DEVSYNC_ACTIVITY_INLINE_MAX_CHARS ?? 800)
@@ -222,8 +223,9 @@ function createSaveGeneratedMarkdownTool(scope) {
 
       const { root, target, relative } = await uniqueGeneratedPath(scope.projectId, fileName || title)
       assertWritePath(scope, "save_generated_markdown", relative)
+      const markdown = `${String(content).trim()}\n`
       await fs.mkdir(root, { recursive: true })
-      await fs.writeFile(target, `${String(content).trim()}\n`, "utf8")
+      await fs.writeFile(target, markdown, "utf8")
       await appendSystemLogEvent({
         action: "generated_markdown.saved",
         source: "agent-tool",
@@ -231,6 +233,15 @@ function createSaveGeneratedMarkdownTool(scope) {
         projectId: scope.projectId,
         target: relative,
         summary: `Saved generated markdown ${path.basename(relative)}`,
+      })
+      await appendMentionEvents({
+        actor: "agent",
+        after: markdown,
+        before: "",
+        projectId: scope.projectId,
+        source: "agent-tool",
+        target: relative,
+        targetType: "generated",
       })
 
       return {

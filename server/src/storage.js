@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
+import { appendMentionEvents } from "./mentions.js"
 import { appendSystemLogEvent } from "./system-log.js"
 
 const PROJECT_FILE = "project.json"
@@ -1598,16 +1599,14 @@ export async function addTextArtifact(projectId, input) {
 
   const dir = path.join(projectPath(projectId), "artifacts")
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
-  await safeWriteTextFile(
-    target,
-    markdownDocument(title, content, {
-      type: "text",
-      created,
-      creator,
-      lastEdited: created,
-      lastEditor: creator,
-    })
-  )
+  const document = markdownDocument(title, content, {
+    type: "text",
+    created,
+    creator,
+    lastEdited: created,
+    lastEditor: creator,
+  })
+  await safeWriteTextFile(target, document)
   const relativePath = projectRelative(projectId, target)
   await appendActivityEntry(projectId, {
     author: creator,
@@ -1626,6 +1625,7 @@ export async function addTextArtifact(projectId, input) {
     target: relativePath,
     summary: `Added text artifact ${title}`,
   })
+  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "artifact")
 
   return {
     name: path.basename(target),
@@ -1648,18 +1648,16 @@ export async function addLinkArtifact(projectId, input) {
   const body = [`Source: ${url}`, notes ? `\n${notes}` : ""].join("\n")
   const dir = path.join(projectPath(projectId), "artifacts")
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
+  const document = markdownDocument(title, body, {
+    type: "link",
+    sourceUrl: url,
+    created,
+    creator,
+    lastEdited: created,
+    lastEditor: creator,
+  })
 
-  await safeWriteTextFile(
-    target,
-    markdownDocument(title, body, {
-      type: "link",
-      sourceUrl: url,
-      created,
-      creator,
-      lastEdited: created,
-      lastEditor: creator,
-    })
-  )
+  await safeWriteTextFile(target, document)
   const relativePath = projectRelative(projectId, target)
   await appendActivityEntry(projectId, {
     author: creator,
@@ -1679,6 +1677,7 @@ export async function addLinkArtifact(projectId, input) {
     summary: `Added link artifact ${title}`,
     metadata: { sourceUrl: url },
   })
+  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "artifact")
 
   return {
     name: path.basename(target),
@@ -1802,6 +1801,18 @@ function normalizePlanBody(body, title) {
   return content ? content : ""
 }
 
+async function appendMentionEventsForWrite(projectId, target, before, after, input = {}, targetType) {
+  await appendMentionEvents({
+    actor: String(input?.author ?? input?.editor ?? input?.creator ?? input?.createdBy ?? "team").trim() || "team",
+    after,
+    before,
+    projectId,
+    source: input?.source ?? "storage",
+    target,
+    targetType,
+  })
+}
+
 export async function createPlanItem(projectId, input) {
   await ensureProjectDirs(projectId)
   await ensurePlanIndex(projectId)
@@ -1819,16 +1830,14 @@ export async function createPlanItem(projectId, input) {
 
   const dir = path.join(projectPath(projectId), "plan")
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
-  await safeWriteTextFile(
-    target,
-    planItemContent(title, normalizePlanBody(content, title), {
-      title,
-      createdAt: created,
-      createdBy: creator,
-      owner,
-      deadline,
-    })
-  )
+  const document = planItemContent(title, normalizePlanBody(content, title), {
+    title,
+    createdAt: created,
+    createdBy: creator,
+    owner,
+    deadline,
+  })
+  await safeWriteTextFile(target, document)
   const relativePath = projectRelative(projectId, target)
   await ensurePlanIndex(projectId)
   await appendActivityEntry(projectId, {
@@ -1846,6 +1855,7 @@ export async function createPlanItem(projectId, input) {
     target: relativePath,
     summary: `Created plan item ${title}`,
   })
+  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "plan")
 
   return {
     name: path.basename(target),
@@ -1900,6 +1910,10 @@ export async function updatePlanIndex(projectId, input = {}) {
   const files = await listProjectFiles(projectId, "plan")
   const content = buildPlanIndexContent(files, requestedItems)
   const target = planIndexPath(projectId)
+  const existingRaw = await safeReadTextFile(target).catch((error) => {
+    if (error.code === "ENOENT") return ""
+    throw error
+  })
 
   await safeWriteTextFile(target, content)
   await touchProject(projectId)
@@ -1911,6 +1925,7 @@ export async function updatePlanIndex(projectId, input = {}) {
     target: `plan/${PLAN_README_FILE}`,
     summary: "Updated plan index",
   })
+  await appendMentionEventsForWrite(projectId, `plan/${PLAN_README_FILE}`, existingRaw, content, input, "plan")
 
   return {
     path: `plan/${PLAN_README_FILE}`,
@@ -1938,6 +1953,10 @@ export async function updateArtifactIndex(projectId, input = {}) {
     readmeName: ARTIFACTS_README_FILE,
   })
   const target = artifactIndexPath(projectId)
+  const existingRaw = await safeReadTextFile(target).catch((error) => {
+    if (error.code === "ENOENT") return ""
+    throw error
+  })
 
   await safeWriteTextFile(target, content)
   await touchProject(projectId)
@@ -1949,6 +1968,7 @@ export async function updateArtifactIndex(projectId, input = {}) {
     target: `artifacts/${ARTIFACTS_README_FILE}`,
     summary: "Updated artifact index",
   })
+  await appendMentionEventsForWrite(projectId, `artifacts/${ARTIFACTS_README_FILE}`, existingRaw, content, input, "artifact")
 
   return {
     path: `artifacts/${ARTIFACTS_README_FILE}`,
@@ -1976,16 +1996,14 @@ export async function addLog(projectId, input) {
   if (content.length > ACTIVITY_INLINE_MAX_CHARS) {
     const dir = path.join(projectPath(projectId), "artifacts")
     const target = await uniquePath(dir, `${dateStamp(new Date(createdAt))}-${slugify(title)}.md`)
-    await safeWriteTextFile(
-      target,
-      markdownDocument(title, content, {
-        type: "activity-log",
-        created: createdAt,
-        creator: author,
-        lastEdited: createdAt,
-        lastEditor: author,
-      })
-    )
+    const document = markdownDocument(title, content, {
+      type: "activity-log",
+      created: createdAt,
+      creator: author,
+      lastEdited: createdAt,
+      lastEditor: author,
+    })
+    await safeWriteTextFile(target, document)
     kind = "artifact"
     artifactPath = projectRelative(projectId, target)
     logContent = `Long update archived as [${title}](../${artifactPath}).`
@@ -2010,6 +2028,14 @@ export async function addLog(projectId, input) {
     summary: title,
     metadata: { kind, artifactPath },
   })
+  await appendMentionEventsForWrite(
+    projectId,
+    artifactPath ?? entry.path,
+    "",
+    content,
+    { ...input, author },
+    artifactPath ? "artifact" : "activity"
+  )
 
   return entry
 }
@@ -2219,7 +2245,8 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
     throw Object.assign(new Error("Content is required"), { statusCode: 400 })
   }
 
-  const existing = parseFrontmatter(await safeReadTextFile(fullPath))
+  const existingRaw = await safeReadTextFile(fullPath)
+  const existing = parseFrontmatter(existingRaw)
   const incoming = parseFrontmatter(input.content)
   const lastEdited = nowIso()
   const lastEditor =
@@ -2234,6 +2261,7 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
 
   await safeWriteTextFile(fullPath, content)
   await touchProject(projectId)
+  await appendMentionEventsForWrite(projectId, projectRelative(projectId, fullPath), existingRaw, content, input)
 
   return {
     path: projectRelative(projectId, fullPath),
@@ -2296,6 +2324,7 @@ export async function updatePlanItem(projectId, relativePath, input = {}) {
     target: projectRelative(projectId, fullPath),
     summary: `Updated plan item ${title}`,
   })
+  await appendMentionEventsForWrite(projectId, projectRelative(projectId, fullPath), existingRaw, content, input, "plan")
 
   return {
     path: projectRelative(projectId, fullPath),
