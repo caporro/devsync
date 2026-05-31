@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto"
 const dataRootDir = path.resolve(process.env.DEVSYNC_DATA_ROOT ?? path.join(process.cwd(), "data"))
 const systemLogDir = path.join(dataRootDir, "system")
 const systemLogFile = path.join(systemLogDir, "events.ndjson")
+const DEFAULT_SYSTEM_LOG_LIMIT = 200
+const MAX_SYSTEM_LOG_LIMIT = 1000
 
 function nowIso() {
   return new Date().toISOString()
@@ -39,25 +41,65 @@ export async function appendSystemLogEvent(input = {}) {
 }
 
 export async function listSystemLogEvents(options = {}) {
-  const limit = Math.max(1, Math.min(Number(options.limit ?? 200) || 200, 1000))
+  const limit = Math.max(
+    1,
+    Math.min(Number(options.limit ?? DEFAULT_SYSTEM_LOG_LIMIT) || DEFAULT_SYSTEM_LOG_LIMIT, MAX_SYSTEM_LOG_LIMIT)
+  )
+  const unbounded = options.unbounded === true
+  const actionFilter = typeof options.action === "string" ? options.action.trim() : ""
+  const metadataFilter = options.metadata && typeof options.metadata === "object" && !Array.isArray(options.metadata)
+    ? options.metadata
+    : null
+
+  const isMetadataMatch = (metadata = {}) => {
+    if (!metadataFilter) {
+      return true
+    }
+
+    for (const [key, rawExpected] of Object.entries(metadataFilter)) {
+      if (rawExpected == null) continue
+      const expected = String(rawExpected).trim()
+      if (!expected) continue
+
+      if (metadata == null || String(metadata[key] ?? "") !== expected) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  const matchesAction = (event) => (
+    !actionFilter || String(event.action ?? "") === actionFilter
+  )
 
   try {
     const raw = await fs.readFile(systemLogFile, "utf8")
-    const events = raw
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line)
-        } catch {
-          return null
-        }
-      })
-      .filter(Boolean)
+    const events = []
+
+    for (const line of raw.split(/\r?\n/).filter(Boolean)) {
+      let event = null
+
+      try {
+        event = JSON.parse(line)
+      } catch {
+        // ignore malformed line
+      }
+
+      if (
+        event &&
+        matchesAction(event) &&
+        isMetadataMatch(event.metadata)
+      ) {
+        events.push(event)
+      }
+    }
+
+    const baseIndex = unbounded ? 0 : Math.max(0, events.length - limit)
 
     return {
       path: path.relative(dataRootDir, systemLogFile).split(path.sep).join("/"),
-      items: events.slice(-limit).reverse(),
+      items: events.slice(baseIndex).reverse(),
     }
   } catch (error) {
     if (error.code === "ENOENT") {

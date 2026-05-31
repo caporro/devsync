@@ -68,6 +68,25 @@ test("stores mention events in system log and unread state in data users", async
   assert.equal(state.lastReadAt, "9999-01-01T00:00:00.000Z")
 })
 
+test("unread count for mentions includes events beyond response limit", async () => {
+  for (let index = 0; index < 8; index += 1) {
+    await appendMentionEvents({
+      actor: "Mario",
+      after: `@[Ala](devsync:user:ada-large)`,
+      before: "",
+      projectId: `demo-${index}`,
+      source: "test",
+      target: `artifacts/spec-${index}.md`,
+      targetType: "artifact",
+    })
+  }
+
+  const inbox = await listMentionInbox({ email: "ada-large" }, { limit: 2 })
+
+  assert.equal(inbox.items.length, 2)
+  assert.equal(inbox.unreadCount, 8)
+})
+
 test("storage writes mention events when content adds a mention", async () => {
   const { addLog, createProject, ensureDataDir } = await import("./storage.js")
 

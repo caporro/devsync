@@ -233,6 +233,71 @@ function matchesAssignee(owner, identities) {
   return Boolean(value && identities.has(value))
 }
 
+async function listMyTaskGroupsForUser(user) {
+  const identities = assigneeIdentities(user)
+  const projects = await listProjects()
+  const groups = await Promise.all(
+    projects.map(async (project) => {
+      const items = (await listTasks(project.id))
+        .filter((item) => matchesAssignee(item.owner, identities))
+        .sort((left, right) => {
+          if (left.done !== right.done) return left.done ? 1 : -1
+          if ((left.deadline || "") !== (right.deadline || "")) {
+            return (left.deadline || "9999-12-31").localeCompare(right.deadline || "9999-12-31")
+          }
+          return right.updatedAt.localeCompare(left.updatedAt)
+        })
+        .map((item) => ({
+          ...item,
+          projectId: project.id,
+          projectName: project.name,
+        }))
+
+      return items.length ? { project, items } : null
+    })
+  )
+
+  return { items: groups.filter(Boolean) }
+}
+
+async function createProjectTaskLegacy(request, reply) {
+  const task = await createTask(request.params.projectId, request.body ?? {})
+  reply.code(201).send(task)
+  void emitAutomationEvent({
+    type: "task.added",
+    projectId: request.params.projectId,
+    payload: { task },
+  }, request.log)
+}
+
+async function updateProjectTaskReadmeLegacy(request, reply) {
+  reply.send(await updateTaskIndex(request.params.projectId, request.body ?? {}))
+}
+
+async function updateProjectTaskLegacyContent(request, reply) {
+  reply.send(
+    await updateTask(
+      request.params.projectId,
+      String(request.query.path ?? ""),
+      request.body ?? {}
+    )
+  )
+}
+
+async function updateProjectTaskLegacyToggle(request, reply) {
+  reply.send(
+    await toggleTask(
+      request.params.projectId,
+      String(request.query.path ?? ""),
+      request.body?.done
+    )
+  )
+}
+
+async function deleteProjectTaskLegacy(request, reply) {
+  reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? "")))
+}
+
 await ensureDataDir()
 
 if (process.env.NODE_ENV !== "test") {
@@ -328,31 +393,14 @@ app.get("/api/users", async (_request, reply) => {
 
 app.get("/api/my/tasks", async (request, reply) => {
   try {
-    const user = auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }
-    const identities = assigneeIdentities(user)
-    const projects = await listProjects()
-    const groups = await Promise.all(
-      projects.map(async (project) => {
-        const items = (await listTasks(project.id))
-          .filter((item) => matchesAssignee(item.owner, identities))
-          .sort((left, right) => {
-            if (left.done !== right.done) return left.done ? 1 : -1
-            if ((left.deadline || "") !== (right.deadline || "")) {
-              return (left.deadline || "9999-12-31").localeCompare(right.deadline || "9999-12-31")
-            }
-            return right.updatedAt.localeCompare(left.updatedAt)
-          })
-          .map((item) => ({
-            ...item,
-            projectId: project.id,
-            projectName: project.name,
-          }))
-
-        return items.length ? { project, items } : null
-      })
-    )
-
-    reply.send({ items: groups.filter(Boolean) })
+    reply.send(await listMyTaskGroupsForUser(auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+app.get("/api/my/plan-items", async (request, reply) => {
+  try {
+    reply.send(await listMyTaskGroupsForUser(auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }))
   } catch (error) {
     sendError(reply, error)
   }
@@ -666,59 +714,34 @@ app.post("/api/projects/:projectId/artifacts/upload", async (request, reply) => 
   }
 })
 
-app.post("/api/projects/:projectId/tasks", async (request, reply) => {
-  try {
-    const task = await createTask(request.params.projectId, request.body ?? {})
-    reply.code(201).send(task)
-    void emitAutomationEvent({
-      type: "task.added",
-      projectId: request.params.projectId,
-      payload: { task },
-    }, request.log)
-  } catch (error) {
-    sendError(reply, error)
+function withTaskErrorBoundary(operation) {
+  return async (request, reply) => {
+    try {
+      await operation(request, reply)
+    } catch (error) {
+      sendError(reply, error)
+    }
   }
-})
+}
 
-app.patch("/api/projects/:projectId/tasks/readme", async (request, reply) => {
-  try {
-    reply.send(await updateTaskIndex(request.params.projectId, request.body ?? {}))
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
+app.post("/api/projects/:projectId/tasks", withTaskErrorBoundary(createProjectTaskLegacy))
+app.post("/api/projects/:projectId/plan", withTaskErrorBoundary(createProjectTaskLegacy))
+
+app.patch("/api/projects/:projectId/tasks/readme", withTaskErrorBoundary(updateProjectTaskReadmeLegacy))
+app.patch("/api/projects/:projectId/plan/readme", withTaskErrorBoundary(updateProjectTaskReadmeLegacy))
+
+app.patch("/api/projects/:projectId/tasks/content", withTaskErrorBoundary(updateProjectTaskLegacyContent))
+app.patch("/api/projects/:projectId/plan/content", withTaskErrorBoundary(updateProjectTaskLegacyContent))
+
+app.patch("/api/projects/:projectId/tasks/toggle", withTaskErrorBoundary(updateProjectTaskLegacyToggle))
+app.patch("/api/projects/:projectId/plan/toggle", withTaskErrorBoundary(updateProjectTaskLegacyToggle))
+
+app.delete("/api/projects/:projectId/tasks", withTaskErrorBoundary(deleteProjectTaskLegacy))
+app.delete("/api/projects/:projectId/plan", withTaskErrorBoundary(deleteProjectTaskLegacy))
 
 app.patch("/api/projects/:projectId/artifacts/readme", async (request, reply) => {
   try {
     reply.send(await updateArtifactIndex(request.params.projectId, request.body ?? {}))
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
-
-app.patch("/api/projects/:projectId/tasks/content", async (request, reply) => {
-  try {
-    reply.send(
-      await updateTask(
-        request.params.projectId,
-        String(request.query.path ?? ""),
-        request.body ?? {}
-      )
-    )
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
-
-app.patch("/api/projects/:projectId/tasks/toggle", async (request, reply) => {
-  try {
-    reply.send(
-      await toggleTask(
-        request.params.projectId,
-        String(request.query.path ?? ""),
-        request.body?.done
-      )
-    )
   } catch (error) {
     sendError(reply, error)
   }
@@ -788,14 +811,6 @@ app.patch("/api/projects/:projectId/generated/content", async (request, reply) =
 app.delete("/api/projects/:projectId/artifacts", async (request, reply) => {
   try {
     reply.send(await deleteArtifact(request.params.projectId, String(request.query.path ?? "")))
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
-
-app.delete("/api/projects/:projectId/tasks", async (request, reply) => {
-  try {
-    reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? "")))
   } catch (error) {
     sendError(reply, error)
   }

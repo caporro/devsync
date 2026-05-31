@@ -174,15 +174,15 @@ export async function listMentionInbox(user, options = {}) {
   const limit = Math.max(1, Math.min(Number(options.limit ?? 200) || 200, 1000))
   const [state, systemLog] = await Promise.all([
     readInboxState(userId),
-    listSystemLogEvents({ limit: 1000 }),
+    listSystemLogEvents({
+      unbounded: true,
+      action: "mention.created",
+      metadata: { userId },
+    }),
   ])
   const lastReadAt = state.lastReadAt ?? null
   const items = systemLog.items
-    .filter((event) => (
-      event.action === "mention.created" &&
-      cleanUserId(event.metadata?.userId) === userId &&
-      (!event.metadata?.vault || event.metadata.vault === vaultName)
-    ))
+    .filter((event) => !event.metadata?.vault || event.metadata.vault === vaultName)
     .slice(0, limit)
     .map((event) => ({
       id: event.id,
@@ -201,7 +201,10 @@ export async function listMentionInbox(user, options = {}) {
   return {
     items,
     lastReadAt,
-    unreadCount: items.filter((item) => item.unread).length,
+    unreadCount: systemLog.items.filter((event) => (
+      (!event.metadata?.vault || event.metadata.vault === vaultName) &&
+      (!lastReadAt || event.createdAt > lastReadAt)
+    )).length,
     userId,
   }
 }

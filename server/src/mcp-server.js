@@ -88,6 +88,14 @@ export function createDevsyncMcpServer() {
     },
     async ({ projectId }) => jsonResult(await listTasks(projectId))
   )
+  server.registerTool(
+    "list_plan_items",
+    {
+      title: "List plan items (deprecated)",
+      description: "Deprecated alias for list_tasks. Use list_tasks.",
+    },
+    async ({ projectId }) => jsonResult(await listTasks(projectId))
+  )
 
   server.registerTool(
     "read_task",
@@ -98,6 +106,14 @@ export function createDevsyncMcpServer() {
         projectId: z.string(),
         path: z.string(),
       },
+    },
+    async ({ projectId, path }) => jsonResult(await readTask(projectId, path))
+  )
+  server.registerTool(
+    "read_plan_item",
+    {
+      title: "Read plan item (deprecated)",
+      description: "Deprecated alias for read_task. Use read_task.",
     },
     async ({ projectId, path }) => jsonResult(await readTask(projectId, path))
   )
@@ -115,6 +131,16 @@ export function createDevsyncMcpServer() {
         body: z.string().optional(),
         createdBy: z.string().optional(),
       },
+    },
+    async ({ projectId, title, owner, deadline, body, createdBy }) => jsonResult(
+      await createTask(projectId, { title, owner, deadline, body, createdBy })
+    )
+  )
+  server.registerTool(
+    "create_plan_item",
+    {
+      title: "Create plan item (deprecated)",
+      description: "Deprecated alias for create_task. Use create_task.",
     },
     async ({ projectId, title, owner, deadline, body, createdBy }) => jsonResult(
       await createTask(projectId, { title, owner, deadline, body, createdBy })
@@ -140,6 +166,16 @@ export function createDevsyncMcpServer() {
       await updateTask(projectId, path, { title, owner, deadline, body, content })
     )
   )
+  server.registerTool(
+    "update_plan_item",
+    {
+      title: "Update plan item (deprecated)",
+      description: "Deprecated alias for update_task. Use update_task.",
+    },
+    async ({ projectId, path, title, owner, deadline, body, content }) => jsonResult(
+      await updateTask(projectId, path, { title, owner, deadline, body, content })
+    )
+  )
 
   server.registerTool(
     "toggle_task",
@@ -154,6 +190,14 @@ export function createDevsyncMcpServer() {
     },
     async ({ projectId, path, done }) => jsonResult(await toggleTask(projectId, path, done))
   )
+  server.registerTool(
+    "toggle_plan_item",
+    {
+      title: "Toggle plan item (deprecated)",
+      description: "Deprecated alias for toggle_task. Use toggle_task.",
+    },
+    async ({ projectId, path, done }) => jsonResult(await toggleTask(projectId, path, done))
+  )
 
   server.registerTool(
     "delete_task",
@@ -164,6 +208,14 @@ export function createDevsyncMcpServer() {
         projectId: z.string(),
         path: z.string(),
       },
+    },
+    async ({ projectId, path }) => jsonResult(await deleteTask(projectId, path))
+  )
+  server.registerTool(
+    "delete_plan_item",
+    {
+      title: "Delete plan item (deprecated)",
+      description: "Deprecated alias for delete_task. Use delete_task.",
     },
     async ({ projectId, path }) => jsonResult(await deleteTask(projectId, path))
   )
