@@ -106,13 +106,13 @@ import {
   addExcalidrawArtifact,
   addTextArtifact,
   agentAttachmentUrl,
-  createPlanItem,
+  createTask,
   createAgentThread,
   createMcpToken,
   createProject,
   deleteMcpToken,
   deleteArtifact,
-  deletePlanItem,
+  deleteTask,
   docsDownloadUrl,
   downloadUrl,
   getAssistantConfig,
@@ -132,7 +132,7 @@ import {
   listAgentThreads,
   listDocs,
   listMcpTokens,
-  listMyPlanItems,
+  listMyTasks,
   listProjects,
   listUsers,
   listAutomations,
@@ -146,24 +146,24 @@ import {
   updateExcalidrawArtifact,
   updateGeneratedContent,
   updatePlanningGantt,
-  updatePlanIndex,
-  updatePlanItemContent,
+  updateTaskIndex,
+  updateTaskContent,
   updateProject,
   uploadArtifact,
   runAutomation,
   sendAgentMessage,
-  togglePlanItem,
+  toggleTask,
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyPlanItem, MyPlanItemGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
+import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
 import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
 const EMPTY_DOCS: DocsSummary[] = []
 const EMPTY_FILES: ProjectFile[] = []
 const ARTIFACT_INDEX_PATH = "artifacts/readme.md"
-const PLAN_INDEX_PATH = "plan/README.md"
+const TASK_INDEX_PATH = "tasks/README.md"
 const CHAT_MAX_WIDTH = "max-w-[760px]"
 const CHAT_THREAD_MENU_VALUE = "threads"
 const THREAD_TITLE_MAX_LENGTH = 36
@@ -190,14 +190,14 @@ const PlanningView = lazy(() =>
   }))
 )
 
-type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "plan" | "plan-item" | "my-items" | "inbox" | "news" | "docs" | "git" | "planning"
+type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "planning"
 type AppRoute = {
   mainView: MainView
   projectId: string | null
   docId: string | null
   artifactPath: string | null
   generatedPath: string | null
-  planItemPath: string | null
+  taskPath: string | null
   docFilePath: string | null
   placeholderTitle: string
   agentId: string
@@ -227,7 +227,7 @@ function markdownProjectFilePath(url: string) {
     .replace(/^(?:\.\/)+/, "")
     .replace(/^(?:\.\.\/)+/, "")
 
-  return /^(?:artifacts|generated|plan)\//.test(normalized) ? normalized : null
+  return /^(?:artifacts|generated|tasks)\//.test(normalized) ? normalized : null
 }
 
 function markdownUserMentionId(url: string) {
@@ -317,7 +317,7 @@ function emptyRoute(mainView: MainView = "activity"): AppRoute {
     docId: null,
     artifactPath: null,
     generatedPath: null,
-    planItemPath: null,
+    taskPath: null,
     docFilePath: null,
     placeholderTitle: "",
     agentId: "",
@@ -372,9 +372,9 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
       return { ...emptyRoute(artifactPath ? "artifact" : "artifacts"), projectId, artifactPath }
     }
 
-    if (section === "plan") {
-      const planItemPath = scopedRouteFilePath("plan", parts.slice(3))
-      return { ...emptyRoute(planItemPath ? "plan-item" : "plan"), projectId, planItemPath }
+    if (section === "tasks") {
+      const taskPath = scopedRouteFilePath("tasks", parts.slice(3))
+      return { ...emptyRoute(taskPath ? "task" : "tasks"), projectId, taskPath }
     }
 
     if (section === "agents" || section === "assistant") {
@@ -418,8 +418,8 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     }
   }
 
-  if (parts[0] === "my-items") {
-    return emptyRoute("my-items")
+  if (parts[0] === "my-tasks") {
+    return emptyRoute("my-tasks")
   }
 
   if (parts[0] === "inbox") {
@@ -467,8 +467,8 @@ function buildAppPath(route: AppRoute) {
     return route.docFilePath ? `${base}/file/${routeFilePathParts(route.docFilePath)}` : base
   }
 
-  if (route.mainView === "my-items") {
-    return "/my-items"
+  if (route.mainView === "my-tasks") {
+    return "/my-tasks"
   }
 
   if (route.mainView === "inbox") {
@@ -521,12 +521,12 @@ function buildAppPath(route: AppRoute) {
       : `${base}/generated`
   }
 
-  if (route.mainView === "plan") {
-    return `${base}/plan`
+  if (route.mainView === "tasks") {
+    return `${base}/tasks`
   }
 
-  if (route.mainView === "plan-item") {
-    return route.planItemPath ? `${base}/plan/${routeFilePathParts(route.planItemPath, "plan")}` : `${base}/plan`
+  if (route.mainView === "task") {
+    return route.taskPath ? `${base}/tasks/${routeFilePathParts(route.taskPath, "tasks")}` : `${base}/tasks`
   }
 
   if (route.mainView === "agents") {
@@ -1550,12 +1550,12 @@ function ActivityEntryView({
 function ProjectRail({
   activePath,
   activeGeneratedPath,
-  activePlanItemPath,
+  activeTaskPath,
   busyAutomationId,
   automations,
   artifacts,
   generatedFiles,
-  planItems,
+  tasks,
   view,
   onOpenConfig,
   onOpenActivity,
@@ -1565,19 +1565,19 @@ function ProjectRail({
   onOpenGeneratedFile,
   onAddArtifact,
   onCreateDrawing,
-  onAddPlanItem,
+  onAddTask,
   onRunAutomation,
-  onOpenPlan,
-  onOpenPlanItem,
+  onOpenTasks,
+  onOpenTask,
 }: {
   activePath: string | null
   activeGeneratedPath: string | null
-  activePlanItemPath: string | null
+  activeTaskPath: string | null
   busyAutomationId: string | null
   automations: AutomationDefinition[]
   artifacts: ProjectFile[]
   generatedFiles: ProjectFile[]
-  planItems: ProjectFile[]
+  tasks: ProjectFile[]
   view: MainView
   onOpenConfig: () => void
   onOpenActivity: () => void
@@ -1587,10 +1587,10 @@ function ProjectRail({
   onOpenGeneratedFile: (path: string) => void
   onAddArtifact: () => void
   onCreateDrawing: () => void
-  onAddPlanItem: () => void
+  onAddTask: () => void
   onRunAutomation: (automationId: string) => void
-  onOpenPlan: () => void
-  onOpenPlanItem: (path: string) => void
+  onOpenTasks: () => void
+  onOpenTask: (path: string) => void
 }) {
   return (
     <aside className="hidden w-[260px] shrink-0 overflow-y-auto border-l border-border/70 bg-background px-4 py-5 lg:block">
@@ -1747,42 +1747,42 @@ function ProjectRail({
           <button
             className={cn(
               "-ml-2 rounded-md px-2 py-1 text-left hover:bg-muted hover:text-foreground",
-              view === "plan" && "bg-muted text-foreground"
+              view === "tasks" && "bg-muted text-foreground"
             )}
-            onClick={onOpenPlan}
+            onClick={onOpenTasks}
             type="button"
           >
-            Plan
+            Tasks
           </button>
           <button
             className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={onAddPlanItem}
-            title="Add plan item"
+            onClick={onAddTask}
+            title="Add task"
             type="button"
           >
             <HugeiconsIcon icon={AddCircleIcon} strokeWidth={2} className="size-4" />
           </button>
         </div>
         <div className="space-y-1">
-          {planItems.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-muted-foreground">No plan items</div>
+          {tasks.length === 0 ? (
+            <div className="px-2 py-1 text-xs text-muted-foreground">No tasks</div>
           ) : (
-            planItems.map((planItem) => (
+            tasks.map((task) => (
               <button
                 className={cn(
                   "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
-                  view === "plan-item" && activePlanItemPath === planItem.path && "bg-muted text-foreground"
+                  view === "task" && activeTaskPath === task.path && "bg-muted text-foreground"
                 )}
-                key={planItem.path}
-                onClick={() => onOpenPlanItem(planItem.path)}
+                key={task.path}
+                onClick={() => onOpenTask(task.path)}
                 type="button"
               >
                 <HugeiconsIcon
                   className="size-4 shrink-0 text-muted-foreground"
-                  icon={iconForFile(planItem.name)}
+                  icon={iconForFile(task.name)}
                   strokeWidth={2}
                 />
-                <span className="truncate">{displayFileTitle(planItem)}</span>
+                <span className="truncate">{displayFileTitle(task)}</span>
               </button>
             ))
           )}
@@ -2530,27 +2530,27 @@ function GitView({
   )
 }
 
-function MyItemsView({
+function MyTasksView({
   groups,
   isLoading,
   isSaving,
   onOpenItem,
   onToggleItem,
 }: {
-  groups: MyPlanItemGroup[]
+  groups: MyTaskGroup[]
   isLoading: boolean
   isSaving: boolean
-  onOpenItem: (item: MyPlanItem) => void
-  onToggleItem: (item: MyPlanItem, done: boolean) => void
+  onOpenItem: (item: MyTask) => void
+  onToggleItem: (item: MyTask, done: boolean) => void
 }) {
   const total = groups.reduce((count, group) => count + group.items.length, 0)
 
   return (
     <section className="mx-auto max-w-3xl">
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-foreground">My items</h1>
+        <h1 className="text-xl font-semibold text-foreground">My tasks</h1>
         <div className="mt-1 text-xs text-muted-foreground">
-          {isLoading ? "Loading..." : `${total} assigned plan item${total === 1 ? "" : "s"}`}
+          {isLoading ? "Loading..." : `${total} assigned task${total === 1 ? "" : "s"}`}
         </div>
       </div>
 
@@ -2558,7 +2558,7 @@ function MyItemsView({
         <div className="text-sm text-muted-foreground">Loading...</div>
       ) : groups.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          No assigned plan items.
+          No assigned tasks.
         </div>
       ) : (
         <div className="space-y-5">
@@ -2947,7 +2947,7 @@ function FileIndexView({
               {checkboxes ? (
                 <div className="min-w-0 flex-1">
                   <Input
-                    aria-label="Plan item title"
+                    aria-label="Task title"
                     className={cn(
                       "h-8 min-w-0 border-transparent bg-transparent px-2 text-sm font-medium shadow-none hover:border-input focus-visible:border-ring",
                       item.done && "text-muted-foreground line-through"
@@ -2975,7 +2975,7 @@ function FileIndexView({
               {checkboxes ? (
                 editingDeadlinePath === item.path ? (
                   <Input
-                    aria-label="Plan item deadline"
+                    aria-label="Task deadline"
                     autoComplete="off"
                     autoFocus
                     className="h-8 w-32 shrink-0 px-2 text-xs sm:w-36"
@@ -3002,7 +3002,7 @@ function FileIndexView({
               {checkboxes ? (
                 editingOwnerPath === item.path ? (
                   <select
-                    aria-label="Plan item owner"
+                    aria-label="Task owner"
                     autoFocus
                     className="h-8 w-36 shrink-0 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
                     disabled={isSaving}
@@ -3040,7 +3040,7 @@ function FileIndexView({
                 <button
                   className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => onOpenFile(item.path)}
-                  title="Open plan item"
+                  title="Open task"
                   type="button"
                 >
                   <HugeiconsIcon icon={FileCodeIcon} strokeWidth={2} className="size-4" />
@@ -3309,7 +3309,7 @@ function DrawingNameDialog({
   )
 }
 
-function PlanItemDialog({
+function TaskDialog({
   busy,
   open,
   body,
@@ -3344,22 +3344,22 @@ function PlanItemDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add plan item</DialogTitle>
-          <DialogDescription>Create a high-level project plan item.</DialogDescription>
+          <DialogTitle>Add task</DialogTitle>
+          <DialogDescription>Create a high-level project task.</DialogDescription>
         </DialogHeader>
 
         <form className="grid gap-5" onSubmit={onSubmit}>
           <section className="grid gap-3">
-            <div className="text-sm font-medium text-foreground">Plan item</div>
+            <div className="text-sm font-medium text-foreground">Task</div>
             <Input
-              name="plan-item-title"
+              name="task-title"
               onChange={(event) => onTitleChange(event.target.value)}
-              placeholder="Plan item title"
+              placeholder="Task title"
               value={title}
             />
             <select
               className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-              name="plan-item-owner"
+              name="task-owner"
               onChange={(event) => onOwnerChange(event.target.value)}
               value={owner}
             >
@@ -3371,16 +3371,16 @@ function PlanItemDialog({
               ))}
             </select>
             <Input
-              aria-label="Plan item deadline"
+              aria-label="Task deadline"
               autoComplete="off"
-              name="plan-item-deadline"
+              name="task-deadline"
               onChange={(event) => onDeadlineChange(event.target.value)}
               type="date"
               value={deadline}
             />
             <textarea
               className="min-h-32 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-              name="plan-item-body"
+              name="task-body"
               onChange={(event) => onBodyChange(event.target.value)}
               placeholder="Notes"
               value={body}
@@ -3392,7 +3392,7 @@ function PlanItemDialog({
               Cancel
             </Button>
             <Button disabled={!canSubmit} type="submit">
-              Create plan item
+              Create task
             </Button>
           </DialogFooter>
         </form>
@@ -3712,7 +3712,7 @@ function WorkspaceApp({
   const [selectedDocId, setSelectedDocId] = useState<string | null>(initialRoute.docId)
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(initialRoute.artifactPath)
   const [selectedGeneratedPath, setSelectedGeneratedPath] = useState<string | null>(initialRoute.generatedPath)
-  const [selectedPlanItemPath, setSelectedPlanItemPath] = useState<string | null>(initialRoute.planItemPath)
+  const [selectedTaskPath, setSelectedTaskPath] = useState<string | null>(initialRoute.taskPath)
   const [selectedDocFilePath, setSelectedDocFilePath] = useState<string | null>(initialRoute.docFilePath)
   const [mainView, setMainView] = useState<MainView>(initialRoute.mainView)
   const [placeholderTitle, setPlaceholderTitle] = useState(initialRoute.placeholderTitle)
@@ -3738,11 +3738,11 @@ function WorkspaceApp({
   const [markdownStatus, setMarkdownStatus] = useState<MarkdownArtifactEditorStatus | null>(null)
   const [planningFullscreen, setPlanningFullscreen] = useState(false)
   const [planningStatus, setPlanningStatus] = useState<PlanningStatus | null>(null)
-  const [planItemDialogOpen, setPlanItemDialogOpen] = useState(false)
-  const [planItemTitle, setPlanItemTitle] = useState("")
-  const [planItemOwner, setPlanItemOwner] = useState("")
-  const [planItemDeadline, setPlanItemDeadline] = useState("")
-  const [planItemBody, setPlanItemBody] = useState("")
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
+  const [taskTitle, setTaskTitle] = useState("")
+  const [taskOwner, setTaskOwner] = useState("")
+  const [taskDeadline, setTaskDeadline] = useState("")
+  const [taskBody, setTaskBody] = useState("")
   const [configName, setConfigName] = useState("")
   const [configOwner, setConfigOwner] = useState("")
   const [configStatus, setConfigStatus] = useState("")
@@ -3772,10 +3772,10 @@ function WorkspaceApp({
     queryKey: ["users"],
     queryFn: listUsers,
   })
-  const myItemsQuery = useQuery({
-    queryKey: ["my-plan-items"],
-    queryFn: listMyPlanItems,
-    enabled: mainView === "my-items",
+  const myTasksQuery = useQuery({
+    queryKey: ["my-tasks"],
+    queryFn: listMyTasks,
+    enabled: mainView === "my-tasks",
   })
   const inboxQuery = useQuery({
     queryKey: ["my-inbox"],
@@ -3874,7 +3874,7 @@ function WorkspaceApp({
       setSelectedDocId(route.docId)
       setSelectedArtifactPath(route.artifactPath)
       setSelectedGeneratedPath(route.generatedPath)
-      setSelectedPlanItemPath(route.planItemPath)
+      setSelectedTaskPath(route.taskPath)
       setSelectedDocFilePath(route.docFilePath)
       setSelectedAgentThreadId(route.agentThreadId)
       setIsCreatingAgentThread(!route.agentThreadId)
@@ -3891,7 +3891,7 @@ function WorkspaceApp({
   }, [])
 
   useEffect(() => {
-    const needsProject = !["agents", "docs", "git", "my-items", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)
+    const needsProject = !["agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)
     if (needsProject && !selectedProjectId && projects.length > 0) {
       return
     }
@@ -3902,7 +3902,7 @@ function WorkspaceApp({
       docId: selectedDocId,
       artifactPath: selectedArtifactPath,
       generatedPath: selectedGeneratedPath,
-      planItemPath: selectedPlanItemPath,
+      taskPath: selectedTaskPath,
       docFilePath: selectedDocFilePath,
       placeholderTitle,
       agentId: "",
@@ -3919,7 +3919,7 @@ function WorkspaceApp({
     selectedDocId,
     selectedArtifactPath,
     selectedGeneratedPath,
-    selectedPlanItemPath,
+    selectedTaskPath,
     selectedDocFilePath,
     placeholderTitle,
     selectedAgentThreadId,
@@ -3927,7 +3927,7 @@ function WorkspaceApp({
   ])
 
   useEffect(() => {
-    if (["agents", "docs", "git", "my-items", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)) {
+    if (["agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)) {
       return
     }
 
@@ -3938,14 +3938,14 @@ function WorkspaceApp({
     if (projects.length === 0) {
       setSelectedProjectId(null)
       setSelectedArtifactPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       return
     }
 
     if (!selectedProjectId || !projects.some((item) => item.id === selectedProjectId)) {
       setSelectedProjectId(projects[0].id)
       setSelectedArtifactPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
     }
   }, [mainView, projects, projectsQuery.isFetched, selectedProjectId])
 
@@ -4127,7 +4127,7 @@ function WorkspaceApp({
     artifactPath?: string | null
     generatedPath?: string | null
     mainView?: MainView
-    planItemPath?: string | null
+    taskPath?: string | null
   }
 
   function normalizeNavigationTarget(target?: string | NavigationTarget | null): NavigationTarget {
@@ -4151,8 +4151,8 @@ function WorkspaceApp({
       return `generated:${selectedGeneratedPath}`
     }
 
-    if (mainView === "plan-item" && selectedPlanItemPath) {
-      return `plan:${selectedPlanItemPath}`
+    if (mainView === "task" && selectedTaskPath) {
+      return `task:${selectedTaskPath}`
     }
 
     return "markdown"
@@ -4167,8 +4167,8 @@ function WorkspaceApp({
       return `generated:${target.generatedPath}`
     }
 
-    if (target.mainView === "plan-item" && target.planItemPath) {
-      return `plan:${target.planItemPath}`
+    if (target.mainView === "task" && target.taskPath) {
+      return `task:${target.taskPath}`
     }
 
     return null
@@ -4300,7 +4300,7 @@ function WorkspaceApp({
     setSelectedAgentThreadId(null)
     setSelectedArtifactPath(null)
     setSelectedGeneratedPath(null)
-    setSelectedPlanItemPath(null)
+    setSelectedTaskPath(null)
     setUnsavedDrawingPath(null)
     setPlaceholderTitle("")
     setAgentDraft("")
@@ -4763,7 +4763,7 @@ function WorkspaceApp({
       setSelectedProjectId(created.id)
       setSelectedDocId(null)
       setSelectedArtifactPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setUnsavedDrawingPath(null)
       setSelectedDocFilePath(null)
       setMainView("activity")
@@ -4780,7 +4780,7 @@ function WorkspaceApp({
       setSelectedDocId(null)
       setSelectedArtifactPath(null)
       setSelectedGeneratedPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setSelectedDocFilePath(null)
       setMainView("activity")
       setPlaceholderTitle("")
@@ -4795,7 +4795,7 @@ function WorkspaceApp({
       setSelectedProjectId(null)
       setSelectedArtifactPath(null)
       setSelectedGeneratedPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setSelectedDocFilePath(null)
       setPlaceholderTitle("")
       setMainView("docs")
@@ -4816,7 +4816,7 @@ function WorkspaceApp({
       })
       setLogContent("")
       setSelectedArtifactPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setMainView("activity")
       await refresh(selectedProjectId)
     })
@@ -4952,11 +4952,11 @@ function WorkspaceApp({
     setArtifactTextContent("")
   }
 
-  function resetPlanItemDialog() {
-    setPlanItemTitle("")
-    setPlanItemOwner("")
-    setPlanItemDeadline("")
-    setPlanItemBody("")
+  function resetTaskDialog() {
+    setTaskTitle("")
+    setTaskOwner("")
+    setTaskDeadline("")
+    setTaskBody("")
   }
 
   async function handleArtifactSubmit(event: FormEvent<HTMLFormElement>) {
@@ -4982,7 +4982,7 @@ function WorkspaceApp({
       resetArtifactDialog()
       setArtifactDialogOpen(false)
       setSelectedArtifactPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setPlaceholderTitle("")
       setMainView("artifacts")
       await refresh(selectedProjectId)
@@ -5037,7 +5037,7 @@ function WorkspaceApp({
       createdPath = created.path
       setSelectedArtifactPath(created.path)
       setSelectedGeneratedPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setUnsavedDrawingPath(null)
       setPlaceholderTitle("")
       setMainView("artifact")
@@ -5052,30 +5052,30 @@ function WorkspaceApp({
     setDrawingDialogMode(null)
   }
 
-  async function handlePlanItemSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     if (!selectedProjectId) {
       return
     }
 
-    await run("plan-item", async () => {
-      await createPlanItem(selectedProjectId, {
-        title: planItemTitle.trim(),
-        owner: planItemOwner.trim(),
-        deadline: planItemDeadline,
-        body: planItemBody,
+    await run("task", async () => {
+      await createTask(selectedProjectId, {
+        title: taskTitle.trim(),
+        owner: taskOwner.trim(),
+        deadline: taskDeadline,
+        body: taskBody,
         createdBy: currentAuthor,
       })
 
-      resetPlanItemDialog()
-      setPlanItemDialogOpen(false)
+      resetTaskDialog()
+      setTaskDialogOpen(false)
       setSelectedArtifactPath(null)
-      setSelectedPlanItemPath(null)
+      setSelectedTaskPath(null)
       setPlaceholderTitle("")
-      setMainView("plan")
+      setMainView("tasks")
       await refresh(selectedProjectId)
-      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, PLAN_INDEX_PATH] })
+      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] })
     })
   }
 
@@ -5092,16 +5092,16 @@ function WorkspaceApp({
     : []
   const artifacts = projectQuery.data?.files.artifacts ?? EMPTY_FILES
   const generated = projectQuery.data?.files.generated ?? EMPTY_FILES
-  const planItems = projectQuery.data?.files.plan ?? EMPTY_FILES
+  const tasks = projectQuery.data?.files.tasks ?? EMPTY_FILES
   const markdownCommandFiles = useMemo(() => {
     const seen = new Set<string>()
 
-    return [...artifacts, ...generated, ...planItems].filter((file) => {
+    return [...artifacts, ...generated, ...tasks].filter((file) => {
       if (seen.has(file.path)) return false
       seen.add(file.path)
       return true
     })
-  }, [artifacts, generated, planItems])
+  }, [artifacts, generated, tasks])
   const closeLogFileMenu = useCallback(() => {
     setLogFileMenu((current) =>
       current.open ? { ...current, open: false } : current
@@ -5226,7 +5226,7 @@ function WorkspaceApp({
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(normalized)
         setSelectedGeneratedPath(null)
-        setSelectedPlanItemPath(null)
+        setSelectedTaskPath(null)
         setPlaceholderTitle("")
         setMainView("artifact")
       }, { artifactPath: normalized, mainView: "artifact" })
@@ -5238,22 +5238,22 @@ function WorkspaceApp({
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
         setSelectedGeneratedPath(normalized)
-        setSelectedPlanItemPath(null)
+        setSelectedTaskPath(null)
         setPlaceholderTitle("")
         setMainView("generated-file")
       }, { generatedPath: normalized, mainView: "generated-file" })
       return
     }
 
-    if (normalized.startsWith("plan/")) {
+    if (normalized.startsWith("tasks/")) {
       guardedNavigation(() => {
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
         setSelectedGeneratedPath(null)
-        setSelectedPlanItemPath(normalized)
+        setSelectedTaskPath(normalized)
         setPlaceholderTitle("")
-        setMainView("plan-item")
-      }, { mainView: "plan-item", planItemPath: normalized })
+        setMainView("task")
+      }, { mainView: "task", taskPath: normalized })
       return
     }
 
@@ -5262,20 +5262,20 @@ function WorkspaceApp({
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
         setSelectedGeneratedPath(null)
-        setSelectedPlanItemPath(null)
+        setSelectedTaskPath(null)
         setPlaceholderTitle("")
         setMainView("activity")
       })
     }
   }
 
-  const myItemGroups = myItemsQuery.data?.items ?? []
+  const myTaskGroups = myTasksQuery.data?.items ?? []
   const inboxItems = inboxQuery.data?.items ?? []
   const newsEntries = newsQuery.data?.items ?? []
   const docFiles = docsFolder?.files ?? EMPTY_FILES
   const selectedArtifact = artifacts.find((file) => file.path === selectedArtifactPath) ?? null
   const selectedGenerated = generated.find((file) => file.path === selectedGeneratedPath) ?? null
-  const selectedPlanItem = planItems.find((file) => file.path === selectedPlanItemPath) ?? null
+  const selectedTask = tasks.find((file) => file.path === selectedTaskPath) ?? null
   const selectedDocFile = docFiles.find((file) => file.path === selectedDocFilePath) ?? null
   const selectedArtifactIsExcalidraw = Boolean(selectedArtifact && isExcalidrawFile(selectedArtifact.name))
   const markdownHeaderStatus =
@@ -5283,15 +5283,15 @@ function WorkspaceApp({
     (
       (mainView === "artifact" && selectedArtifact && isMarkdownFile(selectedArtifact.name) && markdownStatus.title === selectedArtifact.name) ||
       (mainView === "generated-file" && selectedGenerated && isMarkdownFile(selectedGenerated.name) && markdownStatus.title === selectedGenerated.name) ||
-      (mainView === "plan-item" && selectedPlanItem && isMarkdownFile(selectedPlanItem.name) && markdownStatus.title === selectedPlanItem.name)
+      (mainView === "task" && selectedTask && isMarkdownFile(selectedTask.name) && markdownStatus.title === selectedTask.name)
     )
       ? markdownStatus
       : null
   const drawingFullscreenActive = selectedArtifactIsExcalidraw && drawingFullscreen
   const planningFullscreenActive = mainView === "planning" && planningFullscreen
   const immersiveViewActive = drawingFullscreenActive || planningFullscreenActive
-  const isGlobalView = ["docs", "git", "my-items", "inbox", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
-  const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedPlanItem
+  const isGlobalView = ["docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
+  const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedTask
   const artifactQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedArtifactPath],
     queryFn: () => readFile(selectedProjectId!, selectedArtifactPath!),
@@ -5302,14 +5302,14 @@ function WorkspaceApp({
         (isTextFile(selectedArtifact.name) || isExcalidrawFile(selectedArtifact.name))
     ),
   })
-  const planItemQuery = useQuery({
-    queryKey: ["project-file", selectedProjectId, selectedPlanItemPath],
-    queryFn: () => readFile(selectedProjectId!, selectedPlanItemPath!),
+  const taskQuery = useQuery({
+    queryKey: ["project-file", selectedProjectId, selectedTaskPath],
+    queryFn: () => readFile(selectedProjectId!, selectedTaskPath!),
     enabled: Boolean(
       selectedProjectId &&
-        selectedPlanItemPath &&
-      selectedPlanItem &&
-        isTextFile(selectedPlanItem.name)
+        selectedTaskPath &&
+      selectedTask &&
+        isTextFile(selectedTask.name)
     ),
   })
   const generatedQuery = useQuery({
@@ -5322,10 +5322,10 @@ function WorkspaceApp({
         isTextFile(selectedGenerated.name)
     ),
   })
-  const planItemIndexQuery = useQuery({
-    queryKey: ["project-file", selectedProjectId, PLAN_INDEX_PATH],
-    queryFn: () => readFile(selectedProjectId!, PLAN_INDEX_PATH),
-    enabled: Boolean(selectedProjectId && mainView === "plan"),
+  const taskIndexQuery = useQuery({
+    queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH],
+    queryFn: () => readFile(selectedProjectId!, TASK_INDEX_PATH),
+    enabled: Boolean(selectedProjectId && mainView === "tasks"),
   })
   const artifactIndexQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH],
@@ -5377,7 +5377,7 @@ function WorkspaceApp({
       if (selectedArtifactPath === path) {
         setSelectedArtifactPath(null)
         setUnsavedDrawingPath(null)
-        setSelectedPlanItemPath(null)
+        setSelectedTaskPath(null)
         setMainView("artifacts")
       }
       await Promise.all([
@@ -5387,21 +5387,21 @@ function WorkspaceApp({
     })
   }
 
-  async function handleDeletePlanItem(path: string) {
-    if (!selectedProjectId || !window.confirm("Delete plan item?")) {
+  async function handleDeleteTask(path: string) {
+    if (!selectedProjectId || !window.confirm("Delete task?")) {
       return
     }
 
-    await run("planItem-delete", async () => {
-      await deletePlanItem(selectedProjectId, path)
-      if (selectedPlanItemPath === path) {
-        setSelectedPlanItemPath(null)
+    await run("task-delete", async () => {
+      await deleteTask(selectedProjectId, path)
+      if (selectedTaskPath === path) {
+        setSelectedTaskPath(null)
         setSelectedArtifactPath(null)
-        setMainView("plan")
+        setMainView("tasks")
       }
       await Promise.all([
         refresh(selectedProjectId),
-        queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, PLAN_INDEX_PATH] }),
+        queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] }),
       ])
     })
   }
@@ -5478,22 +5478,22 @@ function WorkspaceApp({
     return savedContent
   }
 
-  async function handleSaveMarkdownPlanItem(path: string, content: string) {
+  async function handleSaveMarkdownTask(path: string, content: string) {
     if (!selectedProjectId) {
       return content
     }
 
     let savedContent = content
     await run(
-      "planItem-content",
+      "task-content",
       async () => {
-        const saved = await updatePlanItemContent(selectedProjectId, path, content, currentAuthor)
+        const saved = await updateTaskContent(selectedProjectId, path, content, currentAuthor)
         savedContent = saved.content
         queryClient.setQueryData(["project-file", selectedProjectId, path], saved.content)
         await Promise.all([
           refresh(selectedProjectId),
           queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, path] }),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, PLAN_INDEX_PATH] }),
+          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] }),
         ])
       },
       { throwOnError: true }
@@ -5521,15 +5521,15 @@ function WorkspaceApp({
     )
   }
 
-  async function handleSavePlanIndex(items: FileIndexItem[]) {
+  async function handleSaveTaskIndex(items: FileIndexItem[]) {
     if (!selectedProjectId) {
       return
     }
 
     await run(
-      "planItem-index",
+      "task-index",
       async () => {
-        const saved = await updatePlanIndex(
+        const saved = await updateTaskIndex(
           selectedProjectId,
           items.map((item) => ({
             path: item.path,
@@ -5539,26 +5539,26 @@ function WorkspaceApp({
             deadline: item.deadline,
           }))
         )
-        queryClient.setQueryData(["project-file", selectedProjectId, PLAN_INDEX_PATH], saved.content)
+        queryClient.setQueryData(["project-file", selectedProjectId, TASK_INDEX_PATH], saved.content)
         await Promise.all([
           refresh(selectedProjectId),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, PLAN_INDEX_PATH] }),
+          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] }),
         ])
       },
       { throwOnError: true }
     )
   }
 
-  function handleOpenMyPlanItem(item: MyPlanItem) {
+  function handleOpenMyTask(item: MyTask) {
     guardedNavigation(() => {
       setSelectedDocId(null)
       setSelectedProjectId(item.projectId)
       setSelectedArtifactPath(null)
       setSelectedGeneratedPath(null)
-      setSelectedPlanItemPath(item.path)
+      setSelectedTaskPath(item.path)
       setSelectedDocFilePath(null)
       setPlaceholderTitle("")
-      setMainView("plan-item")
+      setMainView("task")
     })
   }
 
@@ -5577,14 +5577,14 @@ function WorkspaceApp({
     })
   }
 
-  async function handleToggleMyPlanItem(item: MyPlanItem, done: boolean) {
-    await run("my-plan-item", async () => {
-      const saved = await togglePlanItem(item.projectId, item.path, done)
-      queryClient.setQueryData(["project-file", item.projectId, PLAN_INDEX_PATH], saved.content)
+  async function handleToggleMyTask(item: MyTask, done: boolean) {
+    await run("my-task", async () => {
+      const saved = await toggleTask(item.projectId, item.path, done)
+      queryClient.setQueryData(["project-file", item.projectId, TASK_INDEX_PATH], saved.content)
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["my-plan-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["my-tasks"] }),
         refresh(item.projectId),
-        queryClient.invalidateQueries({ queryKey: ["project-file", item.projectId, PLAN_INDEX_PATH] }),
+        queryClient.invalidateQueries({ queryKey: ["project-file", item.projectId, TASK_INDEX_PATH] }),
       ])
     })
   }
@@ -5658,8 +5658,8 @@ function WorkspaceApp({
           activeView={
             mainView === "generated-file" || (mainView === "placeholder" && placeholderTitle === "generated")
             ? "generated"
-            : mainView === "plan-item"
-              ? "plan"
+            : mainView === "task"
+              ? "tasks"
               : mainView
           }
           projects={projects}
@@ -5670,16 +5670,16 @@ function WorkspaceApp({
           onLogout={currentUser.authMode === "none" ? undefined : onLogout}
           onCreateThread={handleCreateProject}
           onDocSelect={handleSelectDoc}
-          onOpenMyItems={() => {
+          onOpenMyTasks={() => {
             guardedNavigation(() => {
               setSelectedDocId(null)
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
-              setMainView("my-items")
+              setMainView("my-tasks")
             })
           }}
           onOpenInbox={() => {
@@ -5688,7 +5688,7 @@ function WorkspaceApp({
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("inbox")
@@ -5700,7 +5700,7 @@ function WorkspaceApp({
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("news")
@@ -5712,7 +5712,7 @@ function WorkspaceApp({
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("planning")
@@ -5724,7 +5724,7 @@ function WorkspaceApp({
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("git")
@@ -5736,7 +5736,7 @@ function WorkspaceApp({
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("system-log")
@@ -5749,7 +5749,7 @@ function WorkspaceApp({
               setSelectedProjectId(null)
               setSelectedArtifactPath(null)
               setSelectedGeneratedPath(null)
-              setSelectedPlanItemPath(null)
+              setSelectedTaskPath(null)
               setSelectedDocFilePath(null)
               setPlaceholderTitle("")
               setMainView("readme")
@@ -5791,8 +5791,8 @@ function WorkspaceApp({
                       ? "News"
                     : mainView === "inbox"
                       ? "Inbox"
-                    : mainView === "my-items"
-                      ? "My items"
+                    : mainView === "my-tasks"
+                      ? "My tasks"
                     : mainView === "planning"
                       ? "Planning"
                     : mainView === "readme"
@@ -5945,12 +5945,12 @@ function WorkspaceApp({
                 </DropdownMenu>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button disabled={!planningActionsRef.current} title="Task columns" type="button" variant="outline">
+                    <Button disabled={!planningActionsRef.current} title="Step columns" type="button" variant="outline">
                       Columns
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuLabel>Task columns</DropdownMenuLabel>
+                    <DropdownMenuLabel>Step columns</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     {PLANNING_COLUMN_OPTIONS.map((option) => (
                       <DropdownMenuCheckboxItem
@@ -5986,7 +5986,7 @@ function WorkspaceApp({
                 <Button
                   onClick={() => planningActionsRef.current?.toggleTaskList()}
                   size="icon"
-                  title={planningStatus?.taskListVisible ? "Hide task list" : "Show task list"}
+                  title={planningStatus?.taskListVisible ? "Hide step list" : "Show step list"}
                   type="button"
                   variant="outline"
                 >
@@ -6134,13 +6134,13 @@ function WorkspaceApp({
                       onOpenArtifact={(projectId, path) => handleOpenProjectFileLink(path, projectId)}
                       onOpenProject={handleSelectProject}
                     />
-                  ) : mainView === "my-items" ? (
-                    <MyItemsView
-                      groups={myItemGroups}
-                      isLoading={myItemsQuery.isLoading}
-                      isSaving={busyAction === "my-plan-item"}
-                      onOpenItem={handleOpenMyPlanItem}
-                      onToggleItem={(item, done) => void handleToggleMyPlanItem(item, done)}
+                  ) : mainView === "my-tasks" ? (
+                    <MyTasksView
+                      groups={myTaskGroups}
+                      isLoading={myTasksQuery.isLoading}
+                      isSaving={busyAction === "my-task"}
+                      onOpenItem={handleOpenMyTask}
+                      onToggleItem={(item, done) => void handleToggleMyTask(item, done)}
                     />
                   ) : mainView === "inbox" ? (
                     <InboxView
@@ -6197,84 +6197,84 @@ function WorkspaceApp({
                         guardedNavigation(() => {
                           setSelectedArtifactPath(path)
                           setSelectedGeneratedPath(null)
-                          setSelectedPlanItemPath(null)
+                          setSelectedTaskPath(null)
                           setPlaceholderTitle("")
                           setMainView("artifact")
                         }, path)
                       }}
                       onSaveItems={handleSaveArtifactIndex}
                     />
-                  ) : mainView === "plan" ? (
+                  ) : mainView === "tasks" ? (
                     <FileIndexView
                       checkboxes
-                      addLabel="Add plan item"
-                      content={planItemIndexQuery.data}
-                      emptyLabel="No plan items"
-                      files={planItems}
-                      indexPath={PLAN_INDEX_PATH}
-                      isLoading={planItemIndexQuery.isLoading}
-                      isSaving={busyAction === "planItem-index"}
+                      addLabel="Add task"
+                      content={taskIndexQuery.data}
+                      emptyLabel="No tasks"
+                      files={tasks}
+                      indexPath={TASK_INDEX_PATH}
+                      isLoading={taskIndexQuery.isLoading}
+                      isSaving={busyAction === "task-index"}
                       ownerOptions={ownerOptions}
-                      title="Plan"
-                      onAdd={() => guardedNavigation(() => setPlanItemDialogOpen(true))}
+                      title="Tasks"
+                      onAdd={() => guardedNavigation(() => setTaskDialogOpen(true))}
                       onOpenFile={(path) => {
                         guardedNavigation(() => {
                           setSelectedArtifactPath(null)
                           setSelectedGeneratedPath(null)
-                          setSelectedPlanItemPath(path)
+                          setSelectedTaskPath(path)
                           setPlaceholderTitle("")
-                          setMainView("plan-item")
+                          setMainView("task")
                         })
                       }}
-                      onSaveItems={handleSavePlanIndex}
+                      onSaveItems={handleSaveTaskIndex}
                     />
-                  ) : mainView === "plan-item" && selectedPlanItem ? (
-                    isMarkdownFile(selectedPlanItem.name) ? (
-                      planItemQuery.isLoading ? (
+                  ) : mainView === "task" && selectedTask ? (
+                    isMarkdownFile(selectedTask.name) ? (
+                      taskQuery.isLoading ? (
                         <TextFileView
-                          content={planItemQuery.data}
-                          isLoading={planItemQuery.isLoading}
+                          content={taskQuery.data}
+                          isLoading={taskQuery.isLoading}
                         />
                       ) : (
                         <MarkdownArtifactEditor
-                          key={selectedPlanItem.path}
-                          content={planItemQuery.data}
+                          key={selectedTask.path}
+                          content={taskQuery.data}
                           isLoading={false}
-                          isSaving={busyAction === "planItem-content"}
+                          isSaving={busyAction === "task-content"}
                           commandFiles={markdownCommandFiles}
                           commandUsers={commandUsers}
-                          path={selectedPlanItem.name}
-                          title={selectedPlanItem.name}
-                          onDelete={() => handleDeletePlanItem(selectedPlanItem.path)}
+                          path={selectedTask.name}
+                          title={selectedTask.name}
+                          onDelete={() => handleDeleteTask(selectedTask.path)}
                           onOpenProjectFile={handleOpenProjectFileLink}
-                          onSave={(nextContent) => handleSaveMarkdownPlanItem(selectedPlanItem.path, nextContent)}
+                          onSave={(nextContent) => handleSaveMarkdownTask(selectedTask.path, nextContent)}
                           onUploadImage={handleUploadMarkdownImage}
                           onActionsChange={handleMarkdownActionsChange}
                           onStatusChange={handleMarkdownStatusChange}
                           resolveUrl={resolveMarkdownAssetUrl}
                         />
                       )
-                    ) : isTextFile(selectedPlanItem.name) ? (
+                    ) : isTextFile(selectedTask.name) ? (
                       <TextFileView
-                        content={planItemQuery.data}
-                        isLoading={planItemQuery.isLoading}
+                        content={taskQuery.data}
+                        isLoading={taskQuery.isLoading}
                       />
                     ) : (
                       <section className="mx-auto max-w-3xl">
                         <div className="mb-5">
                           <h1 className="truncate text-xl font-semibold text-foreground">
-                            {displayFileTitle(selectedPlanItem)}
+                            {displayFileTitle(selectedTask)}
                           </h1>
-                          <div className="mt-1 text-xs text-muted-foreground">{selectedPlanItem.name}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{selectedTask.name}</div>
                         </div>
                         <div className="flex gap-2">
                           <a
                             className="inline-flex rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
-                            href={downloadUrl(project!.id, selectedPlanItem.path)}
+                            href={downloadUrl(project!.id, selectedTask.path)}
                           >
                             Download file
                           </a>
-                          <Button onClick={() => handleDeletePlanItem(selectedPlanItem.path)} type="button" variant="destructive">
+                          <Button onClick={() => handleDeleteTask(selectedTask.path)} type="button" variant="destructive">
                             Delete
                           </Button>
                         </div>
@@ -6392,7 +6392,7 @@ function WorkspaceApp({
                                 guardedNavigation(() => {
                                   setSelectedArtifactPath(path)
                                   setSelectedGeneratedPath(null)
-                                  setSelectedPlanItemPath(null)
+                                  setSelectedTaskPath(null)
                                   setMainView("artifact")
                                 }, path)
                               }}
@@ -6465,22 +6465,22 @@ function WorkspaceApp({
 	                <ProjectRail
 	                  activePath={selectedArtifactPath}
                     activeGeneratedPath={selectedGeneratedPath}
-	                  activePlanItemPath={selectedPlanItemPath}
+	                  activeTaskPath={selectedTaskPath}
 	                  artifacts={artifacts}
                     busyAutomationId={busyAutomationId}
                     generatedFiles={generated}
-	                  planItems={planItems}
+	                  tasks={tasks}
 	                  view={mainView}
                     automations={automations}
 	                  onAddArtifact={() => guardedNavigation(() => setArtifactDialogOpen(true))}
                     onCreateDrawing={handleRequestCreateDrawing}
-	                  onAddPlanItem={() => guardedNavigation(() => setPlanItemDialogOpen(true))}
+	                  onAddTask={() => guardedNavigation(() => setTaskDialogOpen(true))}
                     onRunAutomation={setPendingAutomationId}
                     onOpenConfig={() => {
                       guardedNavigation(() => {
                         setSelectedArtifactPath(null)
                         setSelectedGeneratedPath(null)
-                        setSelectedPlanItemPath(null)
+                        setSelectedTaskPath(null)
                         setMainView("config")
                       })
                     }}
@@ -6488,7 +6488,7 @@ function WorkspaceApp({
 	                    guardedNavigation(() => {
 	                      setSelectedArtifactPath(null)
                         setSelectedGeneratedPath(null)
-	                      setSelectedPlanItemPath(null)
+	                      setSelectedTaskPath(null)
 	                      setPlaceholderTitle("")
 	                      setMainView("activity")
                       })
@@ -6500,7 +6500,7 @@ function WorkspaceApp({
 	                    guardedNavigation(() => {
 	                      setSelectedArtifactPath(null)
                         setSelectedGeneratedPath(null)
-	                      setSelectedPlanItemPath(null)
+	                      setSelectedTaskPath(null)
 	                      setPlaceholderTitle("")
 	                      setMainView("artifacts")
                       })
@@ -6509,7 +6509,7 @@ function WorkspaceApp({
                     guardedNavigation(() => {
                       setSelectedArtifactPath(path)
                       setSelectedGeneratedPath(null)
-                      setSelectedPlanItemPath(null)
+                      setSelectedTaskPath(null)
                       setPlaceholderTitle("")
                       setMainView("artifact")
                     }, path)
@@ -6518,27 +6518,27 @@ function WorkspaceApp({
                     guardedNavigation(() => {
                       setSelectedArtifactPath(null)
                       setSelectedGeneratedPath(path)
-                      setSelectedPlanItemPath(null)
+                      setSelectedTaskPath(null)
                       setPlaceholderTitle("")
                       setMainView("generated-file")
                     })
                   }}
-	                  onOpenPlan={() => {
+	                  onOpenTasks={() => {
                     guardedNavigation(() => {
                       setSelectedArtifactPath(null)
                       setSelectedGeneratedPath(null)
-                      setSelectedPlanItemPath(null)
+                      setSelectedTaskPath(null)
                       setPlaceholderTitle("")
-                      setMainView("plan")
+                      setMainView("tasks")
                     })
                   }}
-                  onOpenPlanItem={(path) => {
+                  onOpenTask={(path) => {
                     guardedNavigation(() => {
                       setSelectedArtifactPath(null)
                       setSelectedGeneratedPath(null)
-                      setSelectedPlanItemPath(path)
+                      setSelectedTaskPath(path)
                       setPlaceholderTitle("")
-                      setMainView("plan-item")
+                      setMainView("task")
                     })
                   }}
                 />
@@ -6577,25 +6577,25 @@ function WorkspaceApp({
           onSubmit={handleDrawingDialogSubmit}
           onTitleChange={setDrawingDialogTitle}
         />
-        <PlanItemDialog
-          busy={busyAction === "plan-item"}
-          body={planItemBody}
-          deadline={planItemDeadline}
-          open={planItemDialogOpen}
-          owner={planItemOwner}
+        <TaskDialog
+          busy={busyAction === "task"}
+          body={taskBody}
+          deadline={taskDeadline}
+          open={taskDialogOpen}
+          owner={taskOwner}
           ownerOptions={ownerOptions}
-          title={planItemTitle}
-          onBodyChange={setPlanItemBody}
-          onDeadlineChange={setPlanItemDeadline}
+          title={taskTitle}
+          onBodyChange={setTaskBody}
+          onDeadlineChange={setTaskDeadline}
           onOpenChange={(open) => {
-            setPlanItemDialogOpen(open)
+            setTaskDialogOpen(open)
             if (!open) {
-              resetPlanItemDialog()
+              resetTaskDialog()
             }
           }}
-          onOwnerChange={setPlanItemOwner}
-          onSubmit={handlePlanItemSubmit}
-          onTitleChange={setPlanItemTitle}
+          onOwnerChange={setTaskOwner}
+          onSubmit={handleTaskSubmit}
+          onTitleChange={setTaskTitle}
         />
         <AlertDialog open={Boolean(pendingAutomation)} onOpenChange={(open) => {
           if (!open) {

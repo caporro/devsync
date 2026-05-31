@@ -1,16 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import {
-  createPlanItem,
-  deletePlanItem,
+  createTask,
+  deleteTask,
   getProject,
-  listPlanItems,
+  listTasks,
   listProjects,
-  readPlanItem,
+  readTask,
   readProjectFile,
   searchFiles,
-  togglePlanItem,
-  updatePlanItem,
+  toggleTask,
+  updateTask,
 } from "./storage.js"
 
 function jsonResult(value) {
@@ -78,35 +78,35 @@ export function createDevsyncMcpServer() {
   )
 
   server.registerTool(
-    "list_plan_items",
+    "list_tasks",
     {
-      title: "List plan items",
-      description: "List high-level project plan items from plan/README.md and plan/*.md.",
+      title: "List tasks",
+      description: "List high-level project tasks from tasks/README.md and tasks/*.md.",
       inputSchema: {
         projectId: z.string(),
       },
     },
-    async ({ projectId }) => jsonResult(await listPlanItems(projectId))
+    async ({ projectId }) => jsonResult(await listTasks(projectId))
   )
 
   server.registerTool(
-    "read_plan_item",
+    "read_task",
     {
-      title: "Read plan item",
-      description: "Read one project plan item markdown file.",
+      title: "Read task",
+      description: "Read one project task markdown file.",
       inputSchema: {
         projectId: z.string(),
         path: z.string(),
       },
     },
-    async ({ projectId, path }) => jsonResult(await readPlanItem(projectId, path))
+    async ({ projectId, path }) => jsonResult(await readTask(projectId, path))
   )
 
   server.registerTool(
-    "create_plan_item",
+    "create_task",
     {
-      title: "Create plan item",
-      description: "Create a high-level project plan item under plan/ and add it to plan/README.md.",
+      title: "Create task",
+      description: "Create a high-level project task under tasks/ and add it to tasks/README.md.",
       inputSchema: {
         projectId: z.string(),
         title: z.string(),
@@ -117,15 +117,15 @@ export function createDevsyncMcpServer() {
       },
     },
     async ({ projectId, title, owner, deadline, body, createdBy }) => jsonResult(
-      await createPlanItem(projectId, { title, owner, deadline, body, createdBy })
+      await createTask(projectId, { title, owner, deadline, body, createdBy })
     )
   )
 
   server.registerTool(
-    "update_plan_item",
+    "update_task",
     {
-      title: "Update plan item",
-      description: "Update one project plan item markdown file and keep plan/README.md aligned.",
+      title: "Update task",
+      description: "Update one project task markdown file and keep tasks/README.md aligned.",
       inputSchema: {
         projectId: z.string(),
         path: z.string(),
@@ -137,35 +137,35 @@ export function createDevsyncMcpServer() {
       },
     },
     async ({ projectId, path, title, owner, deadline, body, content }) => jsonResult(
-      await updatePlanItem(projectId, path, { title, owner, deadline, body, content })
+      await updateTask(projectId, path, { title, owner, deadline, body, content })
     )
   )
 
   server.registerTool(
-    "toggle_plan_item",
+    "toggle_task",
     {
-      title: "Toggle plan item",
-      description: "Toggle or set a plan item checkbox in plan/README.md only.",
+      title: "Toggle task",
+      description: "Toggle or set a task checkbox in tasks/README.md only.",
       inputSchema: {
         projectId: z.string(),
         path: z.string(),
         done: z.boolean().optional(),
       },
     },
-    async ({ projectId, path, done }) => jsonResult(await togglePlanItem(projectId, path, done))
+    async ({ projectId, path, done }) => jsonResult(await toggleTask(projectId, path, done))
   )
 
   server.registerTool(
-    "delete_plan_item",
+    "delete_task",
     {
-      title: "Delete plan item",
-      description: "Delete one project plan item file and remove its row from plan/README.md.",
+      title: "Delete task",
+      description: "Delete one project task file and remove its row from tasks/README.md.",
       inputSchema: {
         projectId: z.string(),
         path: z.string(),
       },
     },
-    async ({ projectId, path }) => jsonResult(await deletePlanItem(projectId, path))
+    async ({ projectId, path }) => jsonResult(await deleteTask(projectId, path))
   )
 
   return server

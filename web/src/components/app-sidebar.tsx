@@ -52,7 +52,7 @@ export function AppSidebar({
   onDocSelect,
   onOpenGit,
   onOpenInbox,
-  onOpenMyItems,
+  onOpenMyTasks,
   onOpenNews,
   onOpenPlanning,
   onOpenReadme,
@@ -70,12 +70,12 @@ export function AppSidebar({
   isLoading?: boolean
   isDocsLoading?: boolean
   isCreateDisabled?: boolean
-  activeView?: "activity" | "artifacts" | "generated" | "plan" | "my-items" | "inbox" | "news" | "docs" | "git" | "readme" | string
+  activeView?: "activity" | "artifacts" | "generated" | "tasks" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "readme" | string
   onCreateThread?: () => void
   onDocSelect?: (docId: string) => void
   onOpenGit?: () => void
   onOpenInbox?: () => void
-  onOpenMyItems?: () => void
+  onOpenMyTasks?: () => void
   onOpenNews?: () => void
   onOpenPlanning?: () => void
   onOpenReadme?: () => void
@@ -119,11 +119,11 @@ export function AppSidebar({
       onSelect: onOpenInbox,
     },
     {
-      title: "My items",
+      title: "My tasks",
       url: "#",
       icon: <HugeiconsIcon icon={ChartRingIcon} strokeWidth={2} />,
-      isActive: activeView === "my-items",
-      onSelect: onOpenMyItems,
+      isActive: activeView === "my-tasks",
+      onSelect: onOpenMyTasks,
     },
     {
       title: "System Log",

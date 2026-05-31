@@ -1,7 +1,7 @@
 export type PlanningColumnId = "text" | "owner" | "status" | "external_id" | "link" | "start" | "duration" | "progress"
 
 export const PLANNING_COLUMN_OPTIONS: Array<{ id: PlanningColumnId; label: string; required?: boolean }> = [
-  { id: "text", label: "Task", required: true },
+  { id: "text", label: "Step", required: true },
   { id: "owner", label: "Owner" },
   { id: "status", label: "Status" },
   { id: "external_id", label: "External ID" },

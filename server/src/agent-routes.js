@@ -126,7 +126,7 @@ function markdownProjectFilePath(url) {
     .replace(/^(?:\.\/)+/, "")
     .replace(/^(?:\.\.\/)+/, "")
 
-  return /^(?:artifacts|generated|plan)\//.test(normalized) ? normalized : null
+  return /^(?:artifacts|generated|tasks)\//.test(normalized) ? normalized : null
 }
 
 function markdownLinkUrl(value) {

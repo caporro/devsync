@@ -5,16 +5,16 @@ import type {
   AddLogRequest,
   AddTextArtifactRequest,
   CreateProjectRequest,
-  CreatePlanItemRequest,
+  CreateTaskRequest,
   DocsDetails,
   DocsSummary,
   FileIndexItem,
   GitActionResult,
   MentionInboxPage,
-  MyPlanItemGroup,
+  MyTaskGroup,
   NewsPage,
   PlanningGanttData,
-  PlanIndexItem,
+  TaskIndexItem,
   ProjectDetails,
   ProjectSummary,
   SystemLogPage,
@@ -213,8 +213,8 @@ export async function listUsers() {
   return jsonRequest<{ users: AuthUser[] }>("/api/users")
 }
 
-export async function listMyPlanItems() {
-  return jsonRequest<{ items: MyPlanItemGroup[] }>("/api/my/plan-items")
+export async function listMyTasks() {
+  return jsonRequest<{ items: MyTaskGroup[] }>("/api/my/tasks")
 }
 
 export async function listMyInbox() {
@@ -574,9 +574,9 @@ export async function uploadArtifact(projectId: string, file: File, author?: str
   )
 }
 
-export async function createPlanItem(projectId: string, body: CreatePlanItemRequest) {
+export async function createTask(projectId: string, body: CreateTaskRequest) {
   return jsonRequest<{ name: string; path: string }>(
-    `/api/projects/${projectId}/plan/items`,
+    `/api/projects/${projectId}/tasks`,
     {
       method: "POST",
       body: JSON.stringify(body),
@@ -584,9 +584,9 @@ export async function createPlanItem(projectId: string, body: CreatePlanItemRequ
   )
 }
 
-export async function updatePlanIndex(projectId: string, items: PlanIndexItem[]) {
+export async function updateTaskIndex(projectId: string, items: TaskIndexItem[]) {
   return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/plan/readme`,
+    `/api/projects/${projectId}/tasks/readme`,
     {
       method: "PATCH",
       body: JSON.stringify({ items }),
@@ -640,9 +640,9 @@ export async function updateGeneratedContent(projectId: string, path: string, co
   )
 }
 
-export async function updatePlanItemContent(projectId: string, path: string, content: string, author?: string) {
+export async function updateTaskContent(projectId: string, path: string, content: string, author?: string) {
   return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/plan/items/content?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/tasks/content?path=${encodeURIComponent(path)}`,
     {
       method: "PATCH",
       body: JSON.stringify({ content, author }),
@@ -659,9 +659,9 @@ export async function deleteArtifact(projectId: string, path: string) {
   )
 }
 
-export async function togglePlanItem(projectId: string, path: string, done?: boolean) {
+export async function toggleTask(projectId: string, path: string, done?: boolean) {
   return jsonRequest<{ path: string; itemPath: string; done: boolean; content: string }>(
-    `/api/projects/${projectId}/plan/items/toggle?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/tasks/toggle?path=${encodeURIComponent(path)}`,
     {
       method: "PATCH",
       body: JSON.stringify({ done }),
@@ -669,9 +669,9 @@ export async function togglePlanItem(projectId: string, path: string, done?: boo
   )
 }
 
-export async function deletePlanItem(projectId: string, path: string) {
+export async function deleteTask(projectId: string, path: string) {
   return jsonRequest<{ path: string; deleted: boolean }>(
-    `/api/projects/${projectId}/plan/items?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/tasks?path=${encodeURIComponent(path)}`,
     {
       method: "DELETE",
     }

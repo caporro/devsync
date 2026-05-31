@@ -2,7 +2,7 @@ export type ProjectCounts = {
   artifacts: number
   logs: number
   generated: number
-  planItems?: number
+  tasks?: number
 }
 
 export type ProjectSummary = {
@@ -19,7 +19,7 @@ export type ProjectSummary = {
 export type ProjectFile = {
   name: string
   path: string
-  kind: "artifacts" | "logs" | "generated" | "plan" | "docs"
+  kind: "artifacts" | "logs" | "generated" | "tasks" | "docs"
   size: number
   title?: string | null
   owner?: string | null
@@ -124,7 +124,7 @@ export type PlanningGanttTask = {
   parent?: string | number
   open?: boolean
   projectId?: string | null
-  planItemPath?: string | null
+  taskPath?: string | null
   [key: string]: unknown
 }
 
@@ -148,18 +148,18 @@ export type ProjectDetails = ProjectSummary & {
     artifacts: ProjectFile[]
     logs: ProjectFile[]
     generated: ProjectFile[]
-    plan?: ProjectFile[]
+    tasks?: ProjectFile[]
   }
 }
 
-export type MyPlanItem = ProjectFile & {
+export type MyTask = ProjectFile & {
   projectId: string
   projectName: string
 }
 
-export type MyPlanItemGroup = {
+export type MyTaskGroup = {
   project: ProjectSummary
-  items: MyPlanItem[]
+  items: MyTask[]
 }
 
 export type CreateProjectRequest = {
@@ -187,7 +187,7 @@ export type AddLogRequest = {
   author?: string
 }
 
-export type CreatePlanItemRequest = {
+export type CreateTaskRequest = {
   title: string
   owner?: string
   deadline?: string
@@ -197,7 +197,7 @@ export type CreatePlanItemRequest = {
   createdBy?: string
 }
 
-export type PlanIndexItem = {
+export type TaskIndexItem = {
   path: string
   done: boolean
   title?: string

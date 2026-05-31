@@ -30,7 +30,7 @@ export function markdownProjectFilePath(url: string) {
     .replace(/^(?:\.\/)+/, "")
     .replace(/^(?:\.\.\/)+/, "")
 
-  return /^(?:artifacts|generated|plan)\//.test(normalized) ? normalized : null
+  return /^(?:artifacts|generated|tasks)\//.test(normalized) ? normalized : null
 }
 
 export function markdownUserMentionId(url: string) {

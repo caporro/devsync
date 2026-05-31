@@ -42,7 +42,7 @@ function targetTypeFromPath(target) {
   const value = String(target ?? "")
   if (value.startsWith("artifacts/")) return "artifact"
   if (value.startsWith("generated/")) return "generated"
-  if (value.startsWith("plan/")) return "plan"
+  if (value.startsWith("tasks/")) return "task"
   if (value.startsWith("logs/")) return "activity"
   return "file"
 }

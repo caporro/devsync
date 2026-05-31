@@ -31,6 +31,7 @@ await fs.writeFile(path.join(webDist, "index.html"), "<!doctype html><html></htm
 const { app } = await import("./index.js")
 const { resolveAgentTools } = await import("./agent-tools.js")
 const { summarizeToolPayload } = await import("./ai-logging.js")
+const { ensureDataDir } = await import("./storage.js")
 const {
   diffAutomationWriteSnapshots,
   snapshotAutomationWritePaths,
@@ -89,6 +90,16 @@ async function createProject(cookie, slug) {
 
 function projectDir(projectId) {
   return path.join(tempRoot, vaultName, "projects", projectId)
+}
+
+async function pathExists(target) {
+  try {
+    await fs.access(target)
+    return true
+  } catch (error) {
+    if (error.code === "ENOENT") return false
+    throw error
+  }
 }
 
 async function writeProjectFile(projectId, relativePath, content) {
@@ -154,6 +165,22 @@ test("project folders without metadata are listed and repaired", async () => {
   assert.deepEqual(metadata.tags, [])
 })
 
+test("legacy plan folders migrate to tasks folders", async () => {
+  const projectId = "legacy-plan-migration"
+  const root = projectDir(projectId)
+
+  await fs.mkdir(path.join(root, "plan"), { recursive: true })
+  await fs.writeFile(path.join(root, "project.json"), "{}\n", "utf8")
+  await fs.writeFile(path.join(root, "plan", "README.md"), "# Plan\n\n- [ ] [Do thing](do-thing.md)\n", "utf8")
+  await fs.writeFile(path.join(root, "plan", "do-thing.md"), "# Do thing\n", "utf8")
+
+  await ensureDataDir()
+
+  assert.equal(await pathExists(path.join(root, "plan")), false)
+  assert.equal(await pathExists(path.join(root, "tasks")), true)
+  assert.match(await fs.readFile(path.join(root, "tasks", "README.md"), "utf8"), /^# Tasks/m)
+})
+
 test("invalid MCP bearer attempts are rate limited", async () => {
   clearRateLimits()
 
@@ -204,7 +231,7 @@ test("project write routes reject path traversal", async () => {
   const attempts = [
     `/api/projects/${projectId}/artifacts/content?path=${traversal}`,
     `/api/projects/${projectId}/generated/content?path=${traversal}`,
-    `/api/projects/${projectId}/plan/items/content?path=${traversal}`,
+    `/api/projects/${projectId}/tasks/content?path=${traversal}`,
   ]
 
   for (const url of attempts) {
@@ -410,7 +437,7 @@ test("ai tool logging summarizes payloads without raw content or secrets", () =>
     content: "vault secret content",
     token: "real-token-value",
     nested: {
-      file_path: "plan/README.md",
+      file_path: "tasks/README.md",
       password: "real-password",
     },
   })
@@ -419,7 +446,7 @@ test("ai tool logging summarizes payloads without raw content or secrets", () =>
   assert.equal(summary.path, "generated/report.md")
   assert.equal(summary.token, "[redacted]")
   assert.equal(summary.content.type, "string")
-  assert.equal(summary.nested.file_path, "plan/README.md")
+  assert.equal(summary.nested.file_path, "tasks/README.md")
   assert.equal(summary.nested.password, "[redacted]")
   assert.doesNotMatch(serialized, /vault secret content|real-token-value|real-password/)
 })
