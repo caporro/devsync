@@ -22,6 +22,7 @@ import {
   ChartRingIcon,
   CropIcon,
   GitBranchIcon,
+  Mail01Icon,
   NewsIcon,
 } from "@hugeicons/core-free-icons"
 import type { DocsSummary, ProjectSummary } from "@/domain/devsync"
@@ -50,7 +51,8 @@ export function AppSidebar({
   onCreateThread,
   onDocSelect,
   onOpenGit,
-  onOpenMyItems,
+  onOpenInbox,
+  onOpenMyTasks,
   onOpenNews,
   onOpenPlanning,
   onOpenReadme,
@@ -68,11 +70,12 @@ export function AppSidebar({
   isLoading?: boolean
   isDocsLoading?: boolean
   isCreateDisabled?: boolean
-  activeView?: "activity" | "artifacts" | "generated" | "plan" | "my-items" | "news" | "docs" | "git" | "readme" | string
+  activeView?: "activity" | "artifacts" | "generated" | "tasks" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "readme" | string
   onCreateThread?: () => void
   onDocSelect?: (docId: string) => void
   onOpenGit?: () => void
-  onOpenMyItems?: () => void
+  onOpenInbox?: () => void
+  onOpenMyTasks?: () => void
   onOpenNews?: () => void
   onOpenPlanning?: () => void
   onOpenReadme?: () => void
@@ -109,11 +112,18 @@ export function AppSidebar({
       onSelect: onOpenNews,
     },
     {
-      title: "My items",
+      title: "Inbox",
+      url: "#",
+      icon: <HugeiconsIcon icon={Mail01Icon} strokeWidth={2} />,
+      isActive: activeView === "inbox",
+      onSelect: onOpenInbox,
+    },
+    {
+      title: "My tasks",
       url: "#",
       icon: <HugeiconsIcon icon={ChartRingIcon} strokeWidth={2} />,
-      isActive: activeView === "my-items",
-      onSelect: onOpenMyItems,
+      isActive: activeView === "my-tasks",
+      onSelect: onOpenMyTasks,
     },
     {
       title: "System Log",

@@ -2,6 +2,7 @@ import {
   File01Icon,
   FileCodeIcon,
   FileImageIcon,
+  UserIcon,
 } from "@hugeicons/core-free-icons"
 import type { IconSvgElement } from "@hugeicons/react"
 
@@ -10,6 +11,12 @@ export type MarkdownCommandFile = {
   name: string
   path: string
   title?: string | null
+}
+
+export type MarkdownCommandUser = {
+  email?: string
+  name?: string
+  username?: string
 }
 
 export type CommandMenuItem = {
@@ -49,6 +56,22 @@ function escapeMarkdownLabel(value: string) {
 
 function encodeMarkdownUrl(value: string) {
   return encodeURI(value).replace(/\(/g, "%28").replace(/\)/g, "%29")
+}
+
+export function userMentionId(user: MarkdownCommandUser) {
+  return String(user.email || user.username || user.name || "team").trim().toLowerCase() || "team"
+}
+
+export function userMentionLabel(user: MarkdownCommandUser) {
+  return String(user.name || user.email || user.username || userMentionId(user)).trim()
+}
+
+export function userMarkdown(user: MarkdownCommandUser) {
+  return `@[${escapeMarkdownLabel(userMentionLabel(user))}](devsync:user:${encodeURIComponent(userMentionId(user))})`
+}
+
+export function userCommandIcon() {
+  return UserIcon
 }
 
 export function fileMarkdown(

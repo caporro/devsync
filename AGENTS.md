@@ -102,7 +102,7 @@ UI principles:
 Project view:
 - Left sidebar: global navigation and projects.
 - Center area: selected content.
-- Right rail: activity log, Assistant/automations, artifacts, plan.
+- Right rail: activity log, Assistant/automations, artifacts, tasks.
 - Activity input always visible at the bottom.
 
 ## 6. Data Contracts

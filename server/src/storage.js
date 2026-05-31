@@ -3,17 +3,18 @@ import { createReadStream, createWriteStream } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
+import { appendMentionEvents } from "./mentions.js"
 import { appendSystemLogEvent } from "./system-log.js"
 
 const PROJECT_FILE = "project.json"
 const PLANNING_FILE = "vault-plan.json"
 const LEGACY_GANTT_FILE = "gantt.json"
-const PROJECT_DIRS = ["artifacts", "logs", "generated", "plan", "roles", "automations"]
+const PROJECT_DIRS = ["artifacts", "logs", "generated", "tasks", "roles", "automations"]
 const LEGACY_ACTIVITY_LOG_FILE = "activity.md"
 const ACTIVITY_LOG_DIR = "activity"
 const ARTIFACTS_README_FILE = "readme.md"
-const PLAN_README_FILE = "README.md"
-const LEGACY_PLAN_README_FILE = "readme.md"
+const TASKS_README_FILE = "README.md"
+const LEGACY_TASKS_README_FILE = "readme.md"
 const EXCALIDRAW_EXTENSION = ".excalidraw"
 const ACTIVITY_INLINE_MAX_CHARS = Number(process.env.DEVSYNC_ACTIVITY_INLINE_MAX_CHARS ?? 800)
 const ACTIVITY_LOG_ENTRIES_PER_FILE = Number(process.env.DEVSYNC_ACTIVITY_LOG_ENTRIES_PER_FILE ?? 50)
@@ -104,28 +105,28 @@ function artifactIndexPath(projectId) {
   return path.join(projectPath(projectId), "artifacts", ARTIFACTS_README_FILE)
 }
 
-function planIndexPath(projectId) {
-  return path.join(projectPath(projectId), "plan", PLAN_README_FILE)
+function taskIndexPath(projectId) {
+  return path.join(projectPath(projectId), "tasks", TASKS_README_FILE)
 }
 
-function legacyPlanDirPath(projectId) {
-  return path.join(projectPath(projectId), "tasks")
+function legacyTaskDirPath(projectId) {
+  return path.join(projectPath(projectId), "plan")
 }
 
 function isArtifactIndexName(fileName) {
   return String(fileName).toLowerCase() === ARTIFACTS_README_FILE
 }
 
-function isPlanIndexName(fileName) {
-  return String(fileName).toLowerCase() === PLAN_README_FILE.toLowerCase()
+function isTaskIndexName(fileName) {
+  return String(fileName).toLowerCase() === TASKS_README_FILE.toLowerCase()
 }
 
 function isArtifactIndexPath(relativePath) {
   return String(relativePath).split(path.sep).join("/").toLowerCase() === `artifacts/${ARTIFACTS_README_FILE}`
 }
 
-function isPlanIndexPath(relativePath) {
-  return String(relativePath).split(path.sep).join("/").toLowerCase() === `plan/${PLAN_README_FILE.toLowerCase()}`
+function isTaskIndexPath(relativePath) {
+  return String(relativePath).split(path.sep).join("/").toLowerCase() === `tasks/${TASKS_README_FILE.toLowerCase()}`
 }
 
 function isMarkdownName(fileName) {
@@ -168,6 +169,7 @@ function cleanFileName(input) {
 async function ensureProjectDirs(projectId) {
   const root = projectPath(projectId)
   await ensureSafeDir(root)
+  await migrateLegacyTaskDir(projectId)
   await Promise.all(PROJECT_DIRS.map((dir) => ensureSafeDir(path.join(root, dir))))
 }
 
@@ -512,7 +514,7 @@ async function listProjectFiles(projectId, dirName) {
         .filter((entry) => {
           if (!entry.isFile()) return false
           if (dirName === "artifacts" && isArtifactIndexName(entry.name)) return false
-          if (dirName === "plan" && isPlanIndexName(entry.name)) return false
+          if (dirName === "tasks" && isTaskIndexName(entry.name)) return false
           return true
         })
         .map(async (entry) => {
@@ -776,25 +778,25 @@ function buildIndexContent({
   return `${lines.join("\n").trimEnd()}\n`
 }
 
-function normalizePlanIndexPath(value) {
-  return normalizeIndexPath(value, "plan", PLAN_README_FILE.toLowerCase())
+function normalizeTaskIndexPath(value) {
+  return normalizeIndexPath(value, "tasks", TASKS_README_FILE.toLowerCase())
 }
 
-function parsePlanIndexItems(raw) {
-  return parseIndexItems(raw, "plan", PLAN_README_FILE.toLowerCase())
+function parseTaskIndexItems(raw) {
+  return parseIndexItems(raw, "tasks", TASKS_README_FILE.toLowerCase())
 }
 
 function markdownLinkLabel(value) {
   return String(value).replaceAll("\\", "\\\\").replaceAll("]", "\\]").replace(/\s+/g, " ").trim()
 }
 
-function buildPlanIndexContent(files, preferredItems = []) {
+function buildTaskIndexContent(files, preferredItems = []) {
   return buildIndexContent({
-    title: "Plan",
+    title: "Tasks",
     files,
     preferredItems,
-    dirName: "plan",
-    readmeName: PLAN_README_FILE.toLowerCase(),
+    dirName: "tasks",
+    readmeName: TASKS_README_FILE.toLowerCase(),
     checkboxes: true,
     owners: true,
     deadlines: true,
@@ -804,9 +806,9 @@ function buildPlanIndexContent(files, preferredItems = []) {
   })
 }
 
-async function readPlanIndexItems(projectId) {
+async function readTaskIndexItems(projectId) {
   try {
-    return parsePlanIndexItems(await safeReadTextFile(planIndexPath(projectId)))
+    return parseTaskIndexItems(await safeReadTextFile(taskIndexPath(projectId)))
   } catch (error) {
     if (error.code === "ENOENT") {
       return []
@@ -862,12 +864,13 @@ export async function ensureArtifactIndex(projectId) {
   }
 }
 
-async function migrateLegacyPlan(projectId) {
+// TODO: Remove this one-release plan/ -> tasks migration after existing vaults are migrated.
+async function migrateLegacyTaskDir(projectId) {
   const root = projectPath(projectId)
-  const legacyDir = legacyPlanDirPath(projectId)
-  const planDir = path.join(root, "plan")
+  const legacyDir = legacyTaskDirPath(projectId)
+  const tasksDir = path.join(root, "tasks")
   let hasLegacy = false
-  let hasPlanContent = false
+  let hasTasksContent = false
 
   try {
     const stat = await fs.lstat(legacyDir)
@@ -885,42 +888,44 @@ async function migrateLegacyPlan(projectId) {
   }
 
   try {
-    const stat = await fs.lstat(planDir)
+    const stat = await fs.lstat(tasksDir)
 
     if (stat.isSymbolicLink()) {
       throw storagePathError()
     }
 
-    const planEntries = stat.isDirectory() ? await fs.readdir(planDir) : []
-    hasPlanContent = planEntries.some((name) => name !== ".DS_Store")
+    const taskEntries = stat.isDirectory() ? await fs.readdir(tasksDir) : []
+    hasTasksContent = taskEntries.some((name) => name !== ".DS_Store")
   } catch (error) {
     if (error.code !== "ENOENT") throw error
   }
 
-  if (!hasLegacy || hasPlanContent) {
+  if (!hasLegacy || hasTasksContent) {
     return
   }
 
+  await fs.rm(tasksDir, { recursive: true, force: true })
+
   try {
-    await fs.rename(legacyDir, planDir)
+    await fs.rename(legacyDir, tasksDir)
   } catch (error) {
     if (!["EXDEV", "ENOTEMPTY", "EEXIST"].includes(error.code)) {
       throw error
     }
-    await fs.cp(legacyDir, planDir, { recursive: true, force: false, errorOnExist: false })
+    await fs.cp(legacyDir, tasksDir, { recursive: true, force: false, errorOnExist: false })
     await fs.rm(legacyDir, { recursive: true, force: true })
   }
 
-  const legacyReadme = path.join(planDir, LEGACY_PLAN_README_FILE)
-  const planReadme = path.join(planDir, PLAN_README_FILE)
+  const legacyReadme = path.join(tasksDir, LEGACY_TASKS_README_FILE)
+  const taskReadme = path.join(tasksDir, TASKS_README_FILE)
 
   try {
     const raw = await safeReadTextFile(legacyReadme)
     const next = raw
-      .replace(/^#\s+Tasks\s*$/im, "# Plan")
-      .replace(/\]\((?:tasks\/)?([^)]+)\)/g, "]($1)")
+      .replace(/^#\s+Plan\s*$/im, "# Tasks")
+      .replace(/\]\((?:plan\/)?([^)]+)\)/g, "]($1)")
 
-    await safeWriteTextFile(planReadme, next)
+    await safeWriteTextFile(taskReadme, next)
   } catch (error) {
     if (error.code !== "ENOENT") {
       throw error
@@ -928,18 +933,17 @@ async function migrateLegacyPlan(projectId) {
   }
 }
 
-export async function ensurePlanIndex(projectId) {
+export async function ensureTaskIndex(projectId) {
   await ensureProjectDirs(projectId)
-  await migrateLegacyPlan(projectId)
 
-  const files = await listProjectFiles(projectId, "plan")
-  const content = buildPlanIndexContent(files, await readPlanIndexItems(projectId))
-  const target = planIndexPath(projectId)
+  const files = await listProjectFiles(projectId, "tasks")
+  const content = buildTaskIndexContent(files, await readTaskIndexItems(projectId))
+  const target = taskIndexPath(projectId)
 
   try {
     if ((await safeReadTextFile(target)) === content) {
       return {
-        path: `plan/${PLAN_README_FILE}`,
+        path: `tasks/${TASKS_README_FILE}`,
         content,
       }
     }
@@ -952,7 +956,7 @@ export async function ensurePlanIndex(projectId) {
   await safeWriteTextFile(target, content)
 
   return {
-    path: `plan/${PLAN_README_FILE}`,
+    path: `tasks/${TASKS_README_FILE}`,
     content,
   }
 }
@@ -1274,6 +1278,17 @@ export async function ensureDataDir() {
   await ensureSafeDir(docsDir)
   await ensureSafeDir(path.join(vaultDir, "roles"))
   await ensureSafeDir(path.join(vaultDir, "automations"))
+
+  const entries = await fs.readdir(dataDir, { withFileTypes: true })
+  await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
+    try {
+      assertProjectId(entry.name)
+    } catch {
+      return
+    }
+
+    await migrateLegacyTaskDir(entry.name)
+  }))
 }
 
 export async function getPlanningGantt() {
@@ -1420,11 +1435,11 @@ export async function listProjects() {
 
     try {
       const metadata = await getProjectMetadata(entry.name)
-      await ensurePlanIndex(entry.name)
-      const [artifacts, generated, planItems, activity] = await Promise.all([
+      await ensureTaskIndex(entry.name)
+      const [artifacts, generated, tasks, activity] = await Promise.all([
         listProjectFiles(entry.name, "artifacts"),
         listProjectFiles(entry.name, "generated"),
-        listProjectFiles(entry.name, "plan"),
+        listProjectFiles(entry.name, "tasks"),
         getActivityLog(entry.name),
       ])
 
@@ -1434,7 +1449,7 @@ export async function listProjects() {
           artifacts: artifacts.length,
           logs: activity.entries.length,
           generated: generated.length,
-          planItems: planItems.length,
+          tasks: tasks.length,
         },
       })
     } catch {
@@ -1480,7 +1495,7 @@ export async function createProject(input) {
   await writeProjectMetadata(projectId, metadata)
   await ensureActivityLog(projectId)
   await ensureArtifactIndex(projectId)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
   await safeWriteTextFile(
     path.join(root, "README.md"),
     markdownDocument(displayName, "Project notes start here.", { owner: metadata.owner, status: metadata.status })
@@ -1557,13 +1572,13 @@ export async function getProject(projectId, options = {}) {
   await ensureProjectDirs(projectId)
   await ensureActivityLog(projectId)
   await ensureArtifactIndex(projectId)
-  await ensurePlanIndex(projectId)
-  const [metadata, artifacts, logs, generated, planItems, activity] = await Promise.all([
+  await ensureTaskIndex(projectId)
+  const [metadata, artifacts, logs, generated, tasks, activity] = await Promise.all([
     getProjectMetadata(projectId),
     listProjectFiles(projectId, "artifacts"),
     listProjectFiles(projectId, "logs"),
     listProjectFiles(projectId, "generated"),
-    listProjectFiles(projectId, "plan"),
+    listProjectFiles(projectId, "tasks"),
     getActivityLog(projectId, { files: options.activityFiles }),
   ])
 
@@ -1574,13 +1589,13 @@ export async function getProject(projectId, options = {}) {
       artifacts,
       logs,
       generated,
-      plan: planItems,
+      tasks,
     },
     counts: {
       artifacts: artifacts.length,
       logs: activity.entries.length,
       generated: generated.length,
-      planItems: planItems.length,
+      tasks: tasks.length,
     },
   }
 }
@@ -1598,16 +1613,14 @@ export async function addTextArtifact(projectId, input) {
 
   const dir = path.join(projectPath(projectId), "artifacts")
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
-  await safeWriteTextFile(
-    target,
-    markdownDocument(title, content, {
-      type: "text",
-      created,
-      creator,
-      lastEdited: created,
-      lastEditor: creator,
-    })
-  )
+  const document = markdownDocument(title, content, {
+    type: "text",
+    created,
+    creator,
+    lastEdited: created,
+    lastEditor: creator,
+  })
+  await safeWriteTextFile(target, document)
   const relativePath = projectRelative(projectId, target)
   await appendActivityEntry(projectId, {
     author: creator,
@@ -1626,6 +1639,7 @@ export async function addTextArtifact(projectId, input) {
     target: relativePath,
     summary: `Added text artifact ${title}`,
   })
+  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "artifact")
 
   return {
     name: path.basename(target),
@@ -1648,18 +1662,16 @@ export async function addLinkArtifact(projectId, input) {
   const body = [`Source: ${url}`, notes ? `\n${notes}` : ""].join("\n")
   const dir = path.join(projectPath(projectId), "artifacts")
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
+  const document = markdownDocument(title, body, {
+    type: "link",
+    sourceUrl: url,
+    created,
+    creator,
+    lastEdited: created,
+    lastEditor: creator,
+  })
 
-  await safeWriteTextFile(
-    target,
-    markdownDocument(title, body, {
-      type: "link",
-      sourceUrl: url,
-      created,
-      creator,
-      lastEdited: created,
-      lastEditor: creator,
-    })
-  )
+  await safeWriteTextFile(target, document)
   const relativePath = projectRelative(projectId, target)
   await appendActivityEntry(projectId, {
     author: creator,
@@ -1679,6 +1691,7 @@ export async function addLinkArtifact(projectId, input) {
     summary: `Added link artifact ${title}`,
     metadata: { sourceUrl: url },
   })
+  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "artifact")
 
   return {
     name: path.basename(target),
@@ -1774,78 +1787,116 @@ export async function addExcalidrawArtifact(projectId, input = {}) {
   }
 }
 
-function normalizePlanDeadline(value) {
+function normalizeTaskDeadline(value) {
   const deadline = String(value ?? "").trim()
   return /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? deadline : ""
 }
 
-function sanitizePlanItemFields(fields = {}) {
+function sanitizeTaskFields(fields = {}) {
   return {
     title: String(fields.title ?? "").trim(),
     createdAt: String(fields.createdAt ?? "").trim(),
     createdBy: String(fields.createdBy ?? "").trim(),
     owner: String(fields.owner ?? "").trim(),
-    deadline: normalizePlanDeadline(fields.deadline),
+    deadline: normalizeTaskDeadline(fields.deadline),
   }
 }
 
-function planItemContent(title, body, fields) {
-  return markdownWithFrontmatter(`# ${title}\n\n${String(body ?? "").trim()}`, sanitizePlanItemFields(fields))
+function taskContent(title, body, fields) {
+  return markdownWithFrontmatter(`# ${title}\n\n${String(body ?? "").trim()}`, sanitizeTaskFields(fields))
 }
 
-function planItemBodyWithoutTitle(body) {
+function taskBodyWithoutTitle(body) {
   return String(body ?? "").trimStart().replace(/^#\s+.*(?:\r?\n|$)/, "").trim()
 }
 
-function normalizePlanBody(body, title) {
+function normalizeTaskBody(body, title) {
   const content = String(body ?? "").trim()
   return content ? content : ""
 }
 
-export async function createPlanItem(projectId, input) {
+async function appendMentionEventsForWrite(projectId, target, before, after, input = {}, targetType) {
+  await appendMentionEvents({
+    actor: String(input?.author ?? input?.editor ?? input?.creator ?? input?.createdBy ?? "team").trim() || "team",
+    after,
+    before,
+    projectId,
+    source: input?.source ?? "storage",
+    target,
+    targetType,
+  })
+}
+
+async function appendTaskAssignedEvent({
+  actor,
+  projectId,
+  source,
+  target,
+  title,
+  previousOwner,
+  nextOwner,
+}) {
+  if (String(previousOwner ?? "") === String(nextOwner ?? "")) {
+    return
+  }
+
+  await appendSystemLogEvent({
+    action: "task.assigned",
+    source: source ?? "storage",
+    actor: String(actor ?? "team").trim() || "team",
+    projectId,
+    target,
+    summary: `Assigned task ${title || "task"}`,
+    metadata: {
+      previousOwner: previousOwner || null,
+      owner: nextOwner || null,
+    },
+  })
+}
+
+export async function createTask(projectId, input) {
   await ensureProjectDirs(projectId)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
 
   const title = String(input?.title ?? "").trim()
   const content = String(input?.content ?? input?.body ?? "").trim()
   const created = nowIso()
   const creator = String(input?.createdBy ?? input?.author ?? input?.creator ?? "team").trim() || "team"
   const owner = String(input?.owner ?? "").trim()
-  const deadline = normalizePlanDeadline(input?.deadline)
+  const deadline = normalizeTaskDeadline(input?.deadline)
 
   if (!title) {
-    throw Object.assign(new Error("Plan item title is required"), { statusCode: 400 })
+    throw Object.assign(new Error("Task title is required"), { statusCode: 400 })
   }
 
-  const dir = path.join(projectPath(projectId), "plan")
+  const dir = path.join(projectPath(projectId), "tasks")
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
-  await safeWriteTextFile(
-    target,
-    planItemContent(title, normalizePlanBody(content, title), {
-      title,
-      createdAt: created,
-      createdBy: creator,
-      owner,
-      deadline,
-    })
-  )
+  const document = taskContent(title, normalizeTaskBody(content, title), {
+    title,
+    createdAt: created,
+    createdBy: creator,
+    owner,
+    deadline,
+  })
+  await safeWriteTextFile(target, document)
   const relativePath = projectRelative(projectId, target)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
   await appendActivityEntry(projectId, {
     createdAt: created,
     author: creator,
-    title: `Created plan item ${title}`,
-    content: `Created plan item: ${title} (${relativePath}).`,
+    title: `Created task ${title}`,
+    content: `Created task: ${title} (${relativePath}).`,
   })
   await touchProject(projectId)
   await appendSystemLogEvent({
-    action: "plan_item.created",
+    action: "task.created",
     source: input?.source ?? "storage",
     actor: creator,
     projectId,
     target: relativePath,
-    summary: `Created plan item ${title}`,
+    summary: `Created task ${title}`,
   })
+  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "task")
 
   return {
     name: path.basename(target),
@@ -1853,67 +1904,104 @@ export async function createPlanItem(projectId, input) {
   }
 }
 
-async function updatePlanItemFieldsFromIndex(projectId, item) {
+async function updateTaskFieldsFromIndex(projectId, item) {
   const title = String(item?.title ?? "").trim()
   const owner = String(item?.owner ?? "").trim()
-  const deadline = normalizePlanDeadline(item?.deadline)
+  const deadline = normalizeTaskDeadline(item?.deadline)
 
-  const fullPath = resolvePlanItemFile(projectId, item.path)
-  const existing = parseFrontmatter(await safeReadTextFile(fullPath))
-  const existingFields = sanitizePlanItemFields(existing.fields)
-  const currentTitle = titleFromPlanContent(existing, path.parse(fullPath).name)
+  const fullPath = resolveTaskFile(projectId, item.path)
+  const before = await safeReadTextFile(fullPath)
+  const existing = parseFrontmatter(before)
+  const existingFields = sanitizeTaskFields(existing.fields)
+  const currentTitle = titleFromTaskContent(existing, path.parse(fullPath).name)
   const nextTitle = title || currentTitle
 
   if (currentTitle === nextTitle && existingFields.owner === owner && existingFields.deadline === deadline) {
-    return
+    return null
   }
 
-  const body = planItemBodyWithoutTitle(existing.body)
-  const content = planItemContent(nextTitle, body, {
+  const body = taskBodyWithoutTitle(existing.body)
+  const content = taskContent(nextTitle, body, {
     ...existingFields,
     title: nextTitle,
     owner,
     deadline,
   })
 
+  if (content === before) {
+    return null
+  }
+
   await safeWriteTextFile(fullPath, content)
+  return {
+    before,
+    after: content,
+    path: projectRelative(projectId, fullPath),
+    title: nextTitle,
+    previousOwner: existingFields.owner,
+    nextOwner: owner,
+  }
 }
 
-export async function updatePlanIndex(projectId, input = {}) {
+export async function updateTaskIndex(projectId, input = {}) {
   await ensureProjectDirs(projectId)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
 
   const requestedItems = Array.isArray(input.items)
     ? input.items.map((item) => ({
-        path: normalizePlanIndexPath(item?.path),
+        path: normalizeTaskIndexPath(item?.path),
         title: String(item?.title ?? "").trim(),
         done: Boolean(item?.done),
         owner: String(item?.owner ?? "").trim(),
-        deadline: normalizePlanDeadline(item?.deadline),
+        deadline: normalizeTaskDeadline(item?.deadline),
       }))
     : typeof input.content === "string"
-      ? parsePlanIndexItems(input.content)
-      : await readPlanIndexItems(projectId)
+      ? parseTaskIndexItems(input.content)
+      : await readTaskIndexItems(projectId)
 
-  await Promise.all(requestedItems.filter((item) => item.path).map((item) => updatePlanItemFieldsFromIndex(projectId, item)))
+  const taskUpdateDetails = (
+    await Promise.all(requestedItems.filter((item) => item.path).map((item) => updateTaskFieldsFromIndex(projectId, item)))
+  ).filter((detail) => detail && detail.path)
 
-  const files = await listProjectFiles(projectId, "plan")
-  const content = buildPlanIndexContent(files, requestedItems)
-  const target = planIndexPath(projectId)
+  await Promise.all(taskUpdateDetails.map((detail) =>
+    appendMentionEventsForWrite(projectId, detail.path, detail.before, detail.after, input, "task")
+  ))
+  await Promise.all(
+    taskUpdateDetails
+      .filter((detail) => detail.previousOwner !== detail.nextOwner)
+      .map((detail) => appendTaskAssignedEvent({
+        actor: input?.author ?? input?.editor ?? "team",
+        projectId,
+        source: input?.source ?? "storage",
+        target: detail.path,
+        title: detail.title,
+        previousOwner: detail.previousOwner,
+        nextOwner: detail.nextOwner,
+      }))
+  )
+
+  const files = await listProjectFiles(projectId, "tasks")
+  const content = buildTaskIndexContent(files, requestedItems)
+  const target = taskIndexPath(projectId)
+  const existingRaw = await safeReadTextFile(target).catch((error) => {
+    if (error.code === "ENOENT") return ""
+    throw error
+  })
 
   await safeWriteTextFile(target, content)
   await touchProject(projectId)
   await appendSystemLogEvent({
-    action: "plan_index.updated",
+    action: "task_index.updated",
     source: input?.source ?? "storage",
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
-    target: `plan/${PLAN_README_FILE}`,
-    summary: "Updated plan index",
+    target: `tasks/${TASKS_README_FILE}`,
+    summary: "Updated task index",
   })
+  await appendMentionEventsForWrite(projectId, `tasks/${TASKS_README_FILE}`, existingRaw, content, input, "task")
 
   return {
-    path: `plan/${PLAN_README_FILE}`,
+    path: `tasks/${TASKS_README_FILE}`,
     size: Buffer.byteLength(content, "utf8"),
     content,
   }
@@ -1938,6 +2026,10 @@ export async function updateArtifactIndex(projectId, input = {}) {
     readmeName: ARTIFACTS_README_FILE,
   })
   const target = artifactIndexPath(projectId)
+  const existingRaw = await safeReadTextFile(target).catch((error) => {
+    if (error.code === "ENOENT") return ""
+    throw error
+  })
 
   await safeWriteTextFile(target, content)
   await touchProject(projectId)
@@ -1949,6 +2041,7 @@ export async function updateArtifactIndex(projectId, input = {}) {
     target: `artifacts/${ARTIFACTS_README_FILE}`,
     summary: "Updated artifact index",
   })
+  await appendMentionEventsForWrite(projectId, `artifacts/${ARTIFACTS_README_FILE}`, existingRaw, content, input, "artifact")
 
   return {
     path: `artifacts/${ARTIFACTS_README_FILE}`,
@@ -1976,16 +2069,14 @@ export async function addLog(projectId, input) {
   if (content.length > ACTIVITY_INLINE_MAX_CHARS) {
     const dir = path.join(projectPath(projectId), "artifacts")
     const target = await uniquePath(dir, `${dateStamp(new Date(createdAt))}-${slugify(title)}.md`)
-    await safeWriteTextFile(
-      target,
-      markdownDocument(title, content, {
-        type: "activity-log",
-        created: createdAt,
-        creator: author,
-        lastEdited: createdAt,
-        lastEditor: author,
-      })
-    )
+    const document = markdownDocument(title, content, {
+      type: "activity-log",
+      created: createdAt,
+      creator: author,
+      lastEdited: createdAt,
+      lastEditor: author,
+    })
+    await safeWriteTextFile(target, document)
     kind = "artifact"
     artifactPath = projectRelative(projectId, target)
     logContent = `Long update archived as [${title}](../${artifactPath}).`
@@ -2010,6 +2101,14 @@ export async function addLog(projectId, input) {
     summary: title,
     metadata: { kind, artifactPath },
   })
+  await appendMentionEventsForWrite(
+    projectId,
+    artifactPath ?? entry.path,
+    "",
+    content,
+    { ...input, author },
+    artifactPath ? "artifact" : "activity"
+  )
 
   return entry
 }
@@ -2053,8 +2152,8 @@ function resolveArtifactFile(projectId, relativePath) {
   return resolveProjectSubdirFile(projectId, relativePath, "artifacts", "Only artifact files can be changed", isArtifactIndexPath)
 }
 
-function resolvePlanItemFile(projectId, relativePath) {
-  return resolveProjectSubdirFile(projectId, relativePath, "plan", "Only plan item files can be changed", isPlanIndexPath)
+function resolveTaskFile(projectId, relativePath) {
+  return resolveProjectSubdirFile(projectId, relativePath, "tasks", "Only task files can be changed", isTaskIndexPath)
 }
 
 function resolveGeneratedFile(projectId, relativePath) {
@@ -2082,20 +2181,20 @@ export async function deleteArtifact(projectId, relativePath) {
   }
 }
 
-export async function deletePlanItem(projectId, relativePath) {
+export async function deleteTask(projectId, relativePath) {
   await ensureProjectDirs(projectId)
-  await ensurePlanIndex(projectId)
-  const fullPath = resolvePlanItemFile(projectId, relativePath)
+  await ensureTaskIndex(projectId)
+  const fullPath = resolveTaskFile(projectId, relativePath)
   await safeUnlinkFile(fullPath)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
-    action: "plan_item.deleted",
+    action: "task.deleted",
     source: "storage",
     actor: "team",
     projectId,
     target: projectRelative(projectId, fullPath),
-    summary: `Deleted plan item ${path.basename(fullPath)}`,
+    summary: `Deleted task ${path.basename(fullPath)}`,
   })
 
   return {
@@ -2219,7 +2318,8 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
     throw Object.assign(new Error("Content is required"), { statusCode: 400 })
   }
 
-  const existing = parseFrontmatter(await safeReadTextFile(fullPath))
+  const existingRaw = await safeReadTextFile(fullPath)
+  const existing = parseFrontmatter(existingRaw)
   const incoming = parseFrontmatter(input.content)
   const lastEdited = nowIso()
   const lastEditor =
@@ -2234,6 +2334,7 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
 
   await safeWriteTextFile(fullPath, content)
   await touchProject(projectId)
+  await appendMentionEventsForWrite(projectId, projectRelative(projectId, fullPath), existingRaw, content, input)
 
   return {
     path: projectRelative(projectId, fullPath),
@@ -2242,23 +2343,24 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
   }
 }
 
-function titleFromPlanContent(parsed, fallback) {
+function titleFromTaskContent(parsed, fallback) {
   return String(parsed.fields.title ?? "").trim()
     || titleFromMarkdown(parsed.body)
     || fallback
 }
 
-export async function updatePlanItem(projectId, relativePath, input = {}) {
+export async function updateTask(projectId, relativePath, input = {}) {
   await ensureProjectDirs(projectId)
-  await ensurePlanIndex(projectId)
-  const fullPath = resolvePlanItemFile(projectId, relativePath)
+  await ensureTaskIndex(projectId)
+  const fullPath = resolveTaskFile(projectId, relativePath)
   await assertSafeExistingFile(vaultDir, fullPath)
 
   if (path.extname(fullPath).toLowerCase() !== ".md") {
-    throw Object.assign(new Error("Only markdown plan items can be edited"), { statusCode: 400 })
+    throw Object.assign(new Error("Only markdown tasks can be edited"), { statusCode: 400 })
   }
 
-  const existing = parseFrontmatter(await safeReadTextFile(fullPath))
+  const existingRaw = await safeReadTextFile(fullPath)
+  const existing = parseFrontmatter(existingRaw)
   const hasFullContent = typeof input.content === "string"
   const incoming = hasFullContent
     ? parseFrontmatter(input.content)
@@ -2270,12 +2372,12 @@ export async function updatePlanItem(projectId, relativePath, input = {}) {
         },
         body: input.body ?? input.content ?? existing.body,
       }
-  const existingFields = sanitizePlanItemFields(existing.fields)
+  const existingFields = sanitizeTaskFields(existing.fields)
   const title = hasFullContent
     ? titleFromMarkdown(incoming.body) || String(incoming.fields.title ?? "").trim() || existingFields.title || path.parse(fullPath).name
-    : titleFromPlanContent(incoming, existingFields.title || path.parse(fullPath).name)
-  const body = planItemBodyWithoutTitle(incoming.body)
-  const nextFields = sanitizePlanItemFields({
+    : titleFromTaskContent(incoming, existingFields.title || path.parse(fullPath).name)
+  const body = taskBodyWithoutTitle(incoming.body)
+  const nextFields = sanitizeTaskFields({
     ...existingFields,
     ...incoming.fields,
     title,
@@ -2283,19 +2385,31 @@ export async function updatePlanItem(projectId, relativePath, input = {}) {
     deadline: incoming.fields.deadline === undefined ? existingFields.deadline : incoming.fields.deadline,
   })
 
-  const content = planItemContent(title, body, nextFields)
+  const content = taskContent(title, body, nextFields)
+  const previousOwner = existingFields.owner
+  const nextOwner = nextFields.owner
 
   await safeWriteTextFile(fullPath, content)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
-    action: "plan_item.updated",
+    action: "task.updated",
     source: input?.source ?? "storage",
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: projectRelative(projectId, fullPath),
-    summary: `Updated plan item ${title}`,
+    summary: `Updated task ${title}`,
   })
+  await appendTaskAssignedEvent({
+    actor: input?.author ?? input?.editor ?? "team",
+    projectId,
+    source: input?.source ?? "storage",
+    target: projectRelative(projectId, fullPath),
+    title,
+    previousOwner,
+    nextOwner,
+  })
+  await appendMentionEventsForWrite(projectId, projectRelative(projectId, fullPath), existingRaw, content, input, "task")
 
   return {
     path: projectRelative(projectId, fullPath),
@@ -2304,21 +2418,21 @@ export async function updatePlanItem(projectId, relativePath, input = {}) {
   }
 }
 
-export async function togglePlanItem(projectId, relativePath, done) {
+export async function toggleTask(projectId, relativePath, done) {
   await ensureProjectDirs(projectId)
-  await ensurePlanIndex(projectId)
+  await ensureTaskIndex(projectId)
 
-  const normalizedPath = normalizePlanIndexPath(relativePath)
+  const normalizedPath = normalizeTaskIndexPath(relativePath)
   if (!normalizedPath) {
-    throw Object.assign(new Error("Plan item path is required"), { statusCode: 400 })
+    throw Object.assign(new Error("Task path is required"), { statusCode: 400 })
   }
 
-  const raw = await safeReadTextFile(planIndexPath(projectId))
+  const raw = await safeReadTextFile(taskIndexPath(projectId))
   const fileName = path.basename(normalizedPath)
   const matcher = /^(-[ \t]+\[)([ xX])(\][ \t]+\[[^\]\r\n]*\]\(([^)\r\n]+)\)(?:[ \t]+(?:—|-)[ \t]*[^\r\n]*)?[ \t]*)$/gm
   let changed = false
   const content = raw.replace(matcher, (line, prefix, current, suffix, href) => {
-    const itemPath = normalizePlanIndexPath(href)
+    const itemPath = normalizeTaskIndexPath(href)
     if (itemPath !== normalizedPath) {
       return line
     }
@@ -2329,24 +2443,24 @@ export async function togglePlanItem(projectId, relativePath, done) {
   })
 
   if (!changed) {
-    throw Object.assign(new Error(`Plan item not found: ${fileName}`), { statusCode: 404 })
+    throw Object.assign(new Error(`Task not found: ${fileName}`), { statusCode: 404 })
   }
 
-  await safeWriteTextFile(planIndexPath(projectId), content)
+  await safeWriteTextFile(taskIndexPath(projectId), content)
   await touchProject(projectId)
   await appendSystemLogEvent({
-    action: "plan_item.toggled",
+    action: "task.toggled",
     source: "storage",
     actor: "team",
     projectId,
     target: normalizedPath,
-    summary: `Toggled plan item ${fileName}`,
+    summary: `Toggled task ${fileName}`,
   })
 
   return {
-    path: `plan/${PLAN_README_FILE}`,
+    path: `tasks/${TASKS_README_FILE}`,
     itemPath: normalizedPath,
-    done: parsePlanIndexItems(content).find((item) => item.path === normalizedPath)?.done ?? Boolean(done),
+    done: parseTaskIndexItems(content).find((item) => item.path === normalizedPath)?.done ?? Boolean(done),
     content,
   }
 }
@@ -2356,8 +2470,8 @@ export async function readProjectFile(projectId, relativePath) {
     await ensureArtifactIndex(projectId)
   }
 
-  if (isPlanIndexPath(relativePath)) {
-    await ensurePlanIndex(projectId)
+  if (isTaskIndexPath(relativePath)) {
+    await ensureTaskIndex(projectId)
   }
 
   const fullPath = resolveProjectFile(projectId, relativePath)
@@ -2385,11 +2499,11 @@ export async function readProjectFileBuffer(projectId, relativePath) {
   }
 }
 
-export async function listPlanItems(projectId) {
-  await ensurePlanIndex(projectId)
+export async function listTasks(projectId) {
+  await ensureTaskIndex(projectId)
   const [files, items] = await Promise.all([
-    listProjectFiles(projectId, "plan"),
-    readPlanIndexItems(projectId),
+    listProjectFiles(projectId, "tasks"),
+    readTaskIndexItems(projectId),
   ])
   const itemByPath = new Map(items.map((item) => [item.path, item]))
 
@@ -2405,19 +2519,19 @@ export async function listPlanItems(projectId) {
   })
 }
 
-export async function readPlanItem(projectId, relativePath) {
-  await ensurePlanIndex(projectId)
-  const fullPath = resolvePlanItemFile(projectId, relativePath)
+export async function readTask(projectId, relativePath) {
+  await ensureTaskIndex(projectId)
+  const fullPath = resolveTaskFile(projectId, relativePath)
   await assertSafeExistingFile(vaultDir, fullPath)
 
   const content = await safeReadTextFile(fullPath)
   const parsed = parseFrontmatter(content)
-  const indexItem = (await readPlanIndexItems(projectId))
+  const indexItem = (await readTaskIndexItems(projectId))
     .find((item) => item.path === projectRelative(projectId, fullPath))
 
   return {
     path: projectRelative(projectId, fullPath),
-    title: titleFromPlanContent(parsed, path.parse(fullPath).name),
+    title: titleFromTaskContent(parsed, path.parse(fullPath).name),
     owner: String(parsed.fields.owner ?? indexItem?.owner ?? "").trim(),
     deadline: String(parsed.fields.deadline ?? indexItem?.deadline ?? "").trim(),
     done: Boolean(indexItem?.done),
@@ -2446,7 +2560,7 @@ export async function searchFiles({ projectId, query }) {
 
   for (const project of projects) {
     const detail = project.files ? project : await getProject(project.id)
-    const files = [...detail.files.artifacts, ...detail.files.logs, ...detail.files.generated, ...(detail.files.plan ?? [])]
+    const files = [...detail.files.artifacts, ...detail.files.logs, ...detail.files.generated, ...(detail.files.tasks ?? [])]
 
     for (const file of files) {
       const nameMatches = file.name.toLowerCase().includes(needle)

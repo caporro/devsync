@@ -1,6 +1,6 @@
 # Devsync - AI-heavy team context engine 
 
-DevSync is a local-first, self-hosted team context engine that keeps updates, documentation, artifacts, activity logs, plan items, AI assistants, and automations in sync—turning scattered inputs into shared context, useful outputs, and trackable actions, all stored in a readable filesystem vault that can be inspected and versioned with Git.
+DevSync is a local-first, self-hosted team context engine that keeps updates, documentation, artifacts, activity logs, tasks, AI assistants, and automations in sync—turning scattered inputs into shared context, useful outputs, and trackable actions, all stored in a readable filesystem vault that can be inspected and versioned with Git.
 
 
 ![devsync](docs/screen-demo-drawing.png)
@@ -39,8 +39,8 @@ Typical flow:
 1. create a project;
 2. write short updates in the activity log;
 3. save long-form material as artifacts;
-4. create plan items for work to be done;
-5. use My Items to see what is assigned to you;
+4. create tasks for work to be done;
+5. use My Tasks to see what is assigned to you;
 6. use Assistant and automations to summarize, update reports, and generate outputs;
 7. use Team Docs for shared knowledge not tied to a single project, such as guidelines, statements, ADRs, and similar documents.
 
@@ -48,7 +48,7 @@ Practical rules:
 
 - log = short timeline;
 - artifact = useful material;
-- plan = operational work;
+- tasks = operational work;
 - generated = AI or automation output;
 - docs = team knowledge;
 - vault = data source.
@@ -227,7 +227,8 @@ Default Docker paths:
 ```txt
 /data/devsync-vault/
 /data/auth/
-/data/system-log/
+/data/system/
+/data/users/
 ```
 
 Layout:
@@ -248,7 +249,7 @@ data/<vault>/
       roles/
       automations/
       artifacts/
-      plan/
+      tasks/
       logs/
       generated/
 ```
@@ -260,7 +261,7 @@ Meaning:
 - `README.md`: main notes;
 - `logs/`: append-only activity log;
 - `artifacts/`: notes, links, uploads, images, PDFs, Excalidraw files;
-- `plan/`: plan items, owner, deadline, and index;
+- `tasks/`: tasks, owner, deadline, and index;
 - `generated/`: Assistant/automation output;
 - `assistant.md`: AI instructions;
 - `roles/`: prompt specializations;
@@ -310,7 +311,7 @@ read:
   - "**/*"
 write:
   - generated/**
-  - plan/**
+  - tasks/**
 ---
 Work on the project. Write long outputs to generated/.
 ```
@@ -343,7 +344,7 @@ Supported events:
 
 - `project_log.added`;
 - `artifact.added`;
-- `plan_item.added`.
+- `task.added`.
 
 Schedule uses 5-field cron:
 
@@ -358,12 +359,12 @@ Main tools:
 - `append_activity_log`;
 - `save_generated_markdown`;
 - `send_email_ses`;
-- `list_plan_items`;
-- `read_plan_item`;
-- `create_plan_item`;
-- `update_plan_item`;
-- `toggle_plan_item`;
-- `delete_plan_item`.
+- `list_tasks`;
+- `read_task`;
+- `create_task`;
+- `update_task`;
+- `toggle_task`;
+- `delete_task`.
 
 ## MCP
 
@@ -401,12 +402,12 @@ MCP tools:
 - `get_project`;
 - `search_files`;
 - `read_file`;
-- `list_plan_items`;
-- `read_plan_item`;
-- `create_plan_item`;
-- `update_plan_item`;
-- `toggle_plan_item`;
-- `delete_plan_item`.
+- `list_tasks`;
+- `read_task`;
+- `create_task`;
+- `update_task`;
+- `toggle_task`;
+- `delete_task`.
 
 ## Operate
 
@@ -439,9 +440,23 @@ System Log records events such as:
 - project creation;
 - metadata changes;
 - artifact creation;
+- mention creation;
 - automation runs;
 - git pull/push;
 - role changes.
+
+Mentions use Markdown links:
+
+```md
+@[Claudio](devsync:user:claudio)
+```
+
+Mention notifications are stored as `mention.created` events in `data/system/events.ndjson`.
+Unread state is per user only:
+
+```txt
+data/users/<userId>/inbox-state.json
+```
 
 Recommended upgrade flow:
 

@@ -48,7 +48,7 @@ type PlanningCalendar = {
 const PLANNING_COLUMN_STORAGE_KEY = "devsync.planning.columns"
 const PLANNING_OFF_DAYS_ENABLED = false
 const PLANNING_COLUMN_BY_ID: Record<PlanningColumnId, IColumnConfig> = {
-  text: { id: "text", header: "Task", flexgrow: 2, editor: "text" },
+  text: { id: "text", header: "Step", flexgrow: 2, editor: "text" },
   owner: { id: "owner", header: "Owner", flexgrow: 1, editor: "text" },
   status: { id: "status", header: "Status", flexgrow: 1, editor: "text" },
   external_id: { id: "external_id", header: "External ID", flexgrow: 1, editor: "text" },
@@ -63,7 +63,7 @@ const PLANNING_GANTT_SCALES = [
   { unit: "day", step: 1, format: "%j" },
 ]
 const PLANNING_EDITOR_ITEMS = [
-  { key: "text", comp: "text", label: "Name", config: { placeholder: "Add task name" } },
+  { key: "text", comp: "text", label: "Name", config: { placeholder: "Add step name" } },
   { key: "owner", comp: "text", label: "Owner", config: { placeholder: "Add owner" } },
   { key: "status", comp: "text", label: "Status", config: { placeholder: "Add status" } },
   { key: "external_id", comp: "text", label: "External ID", config: { placeholder: "Add external ID" } },
@@ -74,8 +74,8 @@ const PLANNING_EDITOR_ITEMS = [
     comp: "select",
     label: "Type",
     options: [
-      { id: "task", label: "Task" },
-      { id: "summary", label: "Summary task" },
+      { id: "task", label: "Step" },
+      { id: "summary", label: "Summary" },
       { id: "milestone", label: "Milestone" },
     ],
     isHidden: planningTaskHasNoParent,
@@ -331,7 +331,7 @@ function planningInternalLink(value: string, row: ITask) {
 
   normalized = normalized.replace(/^\/+/, "").replace(/^(?:\.\/)+/, "")
 
-  const routed = normalized.match(/^projects\/([^/]+)\/(artifacts|generated|plan)\/(.+)$/)
+  const routed = normalized.match(/^projects\/([^/]+)\/(artifacts|generated|tasks)\/(.+)$/)
   if (routed) {
     const [, projectId, section, path] = routed
     const routePath = encodePlanningRoutePath(path, section)
@@ -340,7 +340,7 @@ function planningInternalLink(value: string, row: ITask) {
       : null
   }
 
-  const relative = normalized.match(/^(artifacts|generated|plan)\/(.+)$/)
+  const relative = normalized.match(/^(artifacts|generated|tasks)\/(.+)$/)
   const projectId = validPlanningProjectId(row.projectId)
   if (relative && projectId) {
     const [, section, path] = relative
@@ -423,7 +423,7 @@ function PlanningActionCell({
       >
         <HugeiconsIcon className="size-4" icon={branchFilterActive ? FilterRemoveIcon : FilterIcon} strokeWidth={2} />
       </button>
-      <i className="devsync-gantt-action wxi-plus" data-action="add-task" title="Add task" />
+      <i className="devsync-gantt-action wxi-plus" data-action="add-task" title="Add step" />
     </div>
   )
 }
@@ -510,7 +510,7 @@ function planningColumnsFor(
 
 function planningDefaultTask(respectOffDays: boolean) {
   return {
-    text: "New task",
+    text: "New step",
     owner: "",
     status: "",
     external_id: "",
@@ -830,7 +830,7 @@ export function PlanningView({
       event.task = {
         ...planningDefaultTask(respectOffDaysRef.current),
         ...event.task,
-        text: String(event.task?.text ?? "").trim() || "New task",
+        text: String(event.task?.text ?? "").trim() || "New step",
       }
       event.select = true
       event.show = true
@@ -1259,9 +1259,9 @@ export function PlanningView({
       }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete task?</AlertDialogTitle>
+            <AlertDialogTitle>Delete step?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will delete the selected task{pendingDeleteIds.length > 1 ? "s" : ""} and related links.
+              This will delete the selected step{pendingDeleteIds.length > 1 ? "s" : ""} and related links.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

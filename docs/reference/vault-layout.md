@@ -28,7 +28,7 @@ data/<vault>/
         2026-05-24-note.md
         architecture.png
         sketch.excalidraw
-      plan/
+      tasks/
         README.md
         2026-05-24-configure-proxy.md
       logs/
@@ -46,7 +46,7 @@ data/<vault>/
 | --- | --- |
 | `README.md` | General vault notes. |
 | `assistant.md` | Global Assistant instructions. |
-| `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `artifacts/...`, `plan/...`, or `generated/...` path when the task has `projectId`. |
+| `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `artifacts/...`, `tasks/...`, or `generated/...` path when the task has `projectId`. |
 | `roles/` | Global Assistant roles. |
 | `automations/` | Global automations. |
 | `docs/` | Team documentation not tied to a single project. |
@@ -63,7 +63,7 @@ data/<vault>/
 | `roles/` | Project-specific roles. |
 | `automations/` | Project-specific automations. |
 | `artifacts/` | Project material. |
-| `plan/` | Project operating plan. |
+| `tasks/` | Project tasks. |
 | `logs/` | Project logs. |
 | `generated/` | Generated outputs. |
 
@@ -72,7 +72,7 @@ data/<vault>/
 | File | Notes |
 | --- | --- |
 | `artifacts/readme.md` | Artifact index. |
-| `plan/README.md` | Plan item index. |
+| `tasks/README.md` | Task index. |
 | `logs/activity/*` | Activity log segments. |
 | `generated/*.md` | Assistant/automation outputs. |
 
@@ -84,6 +84,6 @@ The code supports some legacy paths:
 - `agents.md` as the old project assistant file;
 - `agents/*.md` or `agents/<name>/AGENT.md`;
 - `gantt.json` as the old global planning file;
-- `tasks/` as the old plan area.
+- `plan/` as the old task area.
 
 Use the modern paths for new vaults.

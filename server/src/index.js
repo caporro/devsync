@@ -18,19 +18,20 @@ import {
 } from "./mcp-tokens.js"
 import { checkRateLimit, recordRateLimitHit, resetRateLimit } from "./rate-limit.js"
 import { emitAutomationEvent, startAutomationScheduler } from "./automation-triggers.js"
+import { listMentionInbox, markInboxRead } from "./mentions.js"
 import { listSystemLogEvents } from "./system-log.js"
 import {
   addLinkArtifact,
   addExcalidrawArtifact,
   addLog,
   addTextArtifact,
-  createPlanItem,
+  createTask,
   createProject,
   createDocFileStream,
   createProjectFileStream,
   dataDir,
   deleteArtifact,
-  deletePlanItem,
+  deleteTask,
   ensureDataDir,
   getActivityLog,
   getDocFolder,
@@ -38,7 +39,7 @@ import {
   getProject,
   listNewsEntries,
   listDocs,
-  listPlanItems,
+  listTasks,
   listProjects,
   readDocFile,
   readProjectFile,
@@ -46,12 +47,12 @@ import {
   updateArtifactIndex,
   updateExcalidrawArtifact,
   updateGeneratedMarkdown,
-  updatePlanIndex,
+  updateTaskIndex,
   updateMarkdownArtifact,
   updatePlanningGantt,
-  updatePlanItem,
+  updateTask,
   updateProject,
-  togglePlanItem,
+  toggleTask,
   vaultDir,
   vaultName,
 } from "./storage.js"
@@ -71,6 +72,8 @@ const LOGIN_USER_LIMIT = Number(process.env.DEVSYNC_LOGIN_USER_LIMIT ?? 8)
 const LOGIN_IP_LIMIT = Number(process.env.DEVSYNC_LOGIN_IP_LIMIT ?? 30)
 const MCP_AUTH_LIMIT = Number(process.env.DEVSYNC_MCP_AUTH_LIMIT ?? 60)
 const MCP_TOKEN_CREATE_LIMIT = Number(process.env.DEVSYNC_MCP_TOKEN_CREATE_LIMIT ?? 10)
+
+await ensureDataDir()
 
 function hasValidApiToken(request) {
   const authorization = request.headers.authorization ?? ""
@@ -323,14 +326,14 @@ app.get("/api/users", async (_request, reply) => {
   reply.send({ users: auth.users() })
 })
 
-app.get("/api/my/plan-items", async (request, reply) => {
+app.get("/api/my/tasks", async (request, reply) => {
   try {
     const user = auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }
     const identities = assigneeIdentities(user)
     const projects = await listProjects()
     const groups = await Promise.all(
       projects.map(async (project) => {
-        const items = (await listPlanItems(project.id))
+        const items = (await listTasks(project.id))
           .filter((item) => matchesAssignee(item.owner, identities))
           .sort((left, right) => {
             if (left.done !== right.done) return left.done ? 1 : -1
@@ -350,6 +353,24 @@ app.get("/api/my/plan-items", async (request, reply) => {
     )
 
     reply.send({ items: groups.filter(Boolean) })
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.get("/api/my/inbox", async (request, reply) => {
+  try {
+    const user = auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }
+    reply.send(await listMentionInbox(user, { limit: request.query.limit }))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.post("/api/my/inbox/read", async (request, reply) => {
+  try {
+    const user = auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }
+    reply.send(await markInboxRead(user, request.body ?? {}))
   } catch (error) {
     sendError(reply, error)
   }
@@ -645,23 +666,23 @@ app.post("/api/projects/:projectId/artifacts/upload", async (request, reply) => 
   }
 })
 
-app.post("/api/projects/:projectId/plan/items", async (request, reply) => {
+app.post("/api/projects/:projectId/tasks", async (request, reply) => {
   try {
-    const planItem = await createPlanItem(request.params.projectId, request.body ?? {})
-    reply.code(201).send(planItem)
+    const task = await createTask(request.params.projectId, request.body ?? {})
+    reply.code(201).send(task)
     void emitAutomationEvent({
-      type: "plan_item.added",
+      type: "task.added",
       projectId: request.params.projectId,
-      payload: { planItem },
+      payload: { task },
     }, request.log)
   } catch (error) {
     sendError(reply, error)
   }
 })
 
-app.patch("/api/projects/:projectId/plan/readme", async (request, reply) => {
+app.patch("/api/projects/:projectId/tasks/readme", async (request, reply) => {
   try {
-    reply.send(await updatePlanIndex(request.params.projectId, request.body ?? {}))
+    reply.send(await updateTaskIndex(request.params.projectId, request.body ?? {}))
   } catch (error) {
     sendError(reply, error)
   }
@@ -675,10 +696,10 @@ app.patch("/api/projects/:projectId/artifacts/readme", async (request, reply) =>
   }
 })
 
-app.patch("/api/projects/:projectId/plan/items/content", async (request, reply) => {
+app.patch("/api/projects/:projectId/tasks/content", async (request, reply) => {
   try {
     reply.send(
-      await updatePlanItem(
+      await updateTask(
         request.params.projectId,
         String(request.query.path ?? ""),
         request.body ?? {}
@@ -689,10 +710,10 @@ app.patch("/api/projects/:projectId/plan/items/content", async (request, reply) 
   }
 })
 
-app.patch("/api/projects/:projectId/plan/items/toggle", async (request, reply) => {
+app.patch("/api/projects/:projectId/tasks/toggle", async (request, reply) => {
   try {
     reply.send(
-      await togglePlanItem(
+      await toggleTask(
         request.params.projectId,
         String(request.query.path ?? ""),
         request.body?.done
@@ -772,9 +793,9 @@ app.delete("/api/projects/:projectId/artifacts", async (request, reply) => {
   }
 })
 
-app.delete("/api/projects/:projectId/plan/items", async (request, reply) => {
+app.delete("/api/projects/:projectId/tasks", async (request, reply) => {
   try {
-    reply.send(await deletePlanItem(request.params.projectId, String(request.query.path ?? "")))
+    reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? "")))
   } catch (error) {
     sendError(reply, error)
   }

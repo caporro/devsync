@@ -7,15 +7,16 @@ import { z } from "zod"
 
 import {
   addLog,
-  createPlanItem,
+  createTask,
   dataDir,
-  deletePlanItem,
-  listPlanItems,
-  readPlanItem,
+  deleteTask,
+  listTasks,
+  readTask,
   slugify,
-  togglePlanItem,
-  updatePlanItem,
+  toggleTask,
+  updateTask,
 } from "./storage.js"
+import { appendMentionEvents } from "./mentions.js"
 import { appendSystemLogEvent } from "./system-log.js"
 
 const ACTIVITY_INLINE_MAX_CHARS = Number(process.env.DEVSYNC_ACTIVITY_INLINE_MAX_CHARS ?? 800)
@@ -222,8 +223,9 @@ function createSaveGeneratedMarkdownTool(scope) {
 
       const { root, target, relative } = await uniqueGeneratedPath(scope.projectId, fileName || title)
       assertWritePath(scope, "save_generated_markdown", relative)
+      const markdown = `${String(content).trim()}\n`
       await fs.mkdir(root, { recursive: true })
-      await fs.writeFile(target, `${String(content).trim()}\n`, "utf8")
+      await fs.writeFile(target, markdown, "utf8")
       await appendSystemLogEvent({
         action: "generated_markdown.saved",
         source: "agent-tool",
@@ -231,6 +233,15 @@ function createSaveGeneratedMarkdownTool(scope) {
         projectId: scope.projectId,
         target: relative,
         summary: `Saved generated markdown ${path.basename(relative)}`,
+      })
+      await appendMentionEvents({
+        actor: "agent",
+        after: markdown,
+        before: "",
+        projectId: scope.projectId,
+        source: "agent-tool",
+        target: relative,
+        targetType: "generated",
       })
 
       return {
@@ -276,77 +287,77 @@ function createAppendActivityLogTool(scope) {
   )
 }
 
-function canWritePlan(scope, options = {}) {
+function canWriteTasks(scope, options = {}) {
   return (scope.write ?? []).some((item) => {
     const clean = cleanVirtualPath(item)
-    return ["**", "**/*", "plan", "plan/**", "plan/*"].includes(clean)
-      || (!options.files && clean === "plan/README.md")
+    return ["**", "**/*", "tasks", "tasks/**", "tasks/*"].includes(clean)
+      || (!options.files && clean === "tasks/README.md")
   })
 }
 
-function assertPlanScope(scope, operation) {
+function assertTaskScope(scope, operation) {
   if (!scope.projectId) {
     throw new Error(`${operation} requires a project scope.`)
   }
 }
 
-function assertPlanWrite(scope, operation) {
-  assertPlanScope(scope, operation)
+function assertTaskWrite(scope, operation) {
+  assertTaskScope(scope, operation)
 
-  if (!canWritePlan(scope, { files: true })) {
-    throw new Error(`${operation} requires write permission for plan/**.`)
+  if (!canWriteTasks(scope, { files: true })) {
+    throw new Error(`${operation} requires write permission for tasks/**.`)
   }
 }
 
-function assertPlanIndexWrite(scope, operation) {
-  assertPlanScope(scope, operation)
+function assertTaskIndexWrite(scope, operation) {
+  assertTaskScope(scope, operation)
 
-  if (!canWritePlan(scope)) {
-    throw new Error(`${operation} requires write permission for plan/README.md or plan/**.`)
+  if (!canWriteTasks(scope)) {
+    throw new Error(`${operation} requires write permission for tasks/README.md or tasks/**.`)
   }
 }
 
-function createListPlanItemsTool(scope) {
+function createListTasksTool(scope) {
   return tool(
     async () => {
-      assertPlanScope(scope, "list_plan_items")
-      return listPlanItems(scope.projectId)
+      assertTaskScope(scope, "list_tasks")
+      return listTasks(scope.projectId)
     },
     {
-      name: "list_plan_items",
-      description: "List high-level project plan items.",
+      name: "list_tasks",
+      description: "List high-level project tasks.",
       schema: z.object({}),
     }
   )
 }
 
-function createReadPlanItemTool(scope) {
+function createReadTaskTool(scope) {
   return tool(
     async ({ path: itemPath }) => {
-      assertPlanScope(scope, "read_plan_item")
-      return readPlanItem(scope.projectId, itemPath)
+      assertTaskScope(scope, "read_task")
+      return readTask(scope.projectId, itemPath)
     },
     {
-      name: "read_plan_item",
-      description: "Read a project plan item from plan/.",
+      name: "read_task",
+      description: "Read a project task from tasks/.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative plan item path."),
+        path: z.string().min(1).describe("Project-relative task path."),
       }),
     }
   )
 }
 
-function createCreatePlanItemTool(scope) {
+function createCreateTaskTool(scope) {
   return tool(
     async ({ title, owner, deadline, body, createdBy }) => {
-      assertPlanWrite(scope, "create_plan_item")
-      return createPlanItem(scope.projectId, { title, owner, deadline, body, createdBy: createdBy || "agent" })
+      assertTaskWrite(scope, "create_task")
+      return createTask(scope.projectId, { title, owner, deadline, body, createdBy: createdBy || "agent" })
     },
     {
-      name: "create_plan_item",
-      description: "Create a high-level project plan item in plan/.",
+      name: "create_task",
+      description: "Create a high-level project task in tasks/.",
       schema: z.object({
-        title: z.string().min(1).describe("Plan item title."),
+        title: z.string().min(1).describe("Task title."),
         owner: z.string().optional().describe("Optional owner label."),
         deadline: z.string().optional().describe("Optional deadline as YYYY-MM-DD."),
         body: z.string().optional().describe("Optional Markdown body."),
@@ -356,17 +367,17 @@ function createCreatePlanItemTool(scope) {
   )
 }
 
-function createUpdatePlanItemTool(scope) {
+function createUpdateTaskTool(scope) {
   return tool(
     async ({ path: itemPath, title, owner, deadline, body, content }) => {
-      assertPlanWrite(scope, "update_plan_item")
-      return updatePlanItem(scope.projectId, itemPath, { title, owner, deadline, body, content })
+      assertTaskWrite(scope, "update_task")
+      return updateTask(scope.projectId, itemPath, { title, owner, deadline, body, content })
     },
     {
-      name: "update_plan_item",
-      description: "Update a project plan item in plan/.",
+      name: "update_task",
+      description: "Update a project task in tasks/.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative plan item path."),
+        path: z.string().min(1).describe("Project-relative task path."),
         title: z.string().optional().describe("New title."),
         owner: z.string().optional().describe("New owner label."),
         deadline: z.string().optional().describe("New deadline as YYYY-MM-DD."),
@@ -377,34 +388,34 @@ function createUpdatePlanItemTool(scope) {
   )
 }
 
-function createTogglePlanItemTool(scope) {
+function createToggleTaskTool(scope) {
   return tool(
     async ({ path: itemPath, done }) => {
-      assertPlanIndexWrite(scope, "toggle_plan_item")
-      return togglePlanItem(scope.projectId, itemPath, done)
+      assertTaskIndexWrite(scope, "toggle_task")
+      return toggleTask(scope.projectId, itemPath, done)
     },
     {
-      name: "toggle_plan_item",
-      description: "Toggle or set a plan item checkbox in plan/README.md only.",
+      name: "toggle_task",
+      description: "Toggle or set a task checkbox in tasks/README.md only.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative plan item path."),
+        path: z.string().min(1).describe("Project-relative task path."),
         done: z.boolean().optional().describe("Optional explicit checkbox value."),
       }),
     }
   )
 }
 
-function createDeletePlanItemTool(scope) {
+function createDeleteTaskTool(scope) {
   return tool(
     async ({ path: itemPath }) => {
-      assertPlanWrite(scope, "delete_plan_item")
-      return deletePlanItem(scope.projectId, itemPath)
+      assertTaskWrite(scope, "delete_task")
+      return deleteTask(scope.projectId, itemPath)
     },
     {
-      name: "delete_plan_item",
-      description: "Delete a project plan item from plan/.",
+      name: "delete_task",
+      description: "Delete a project task from tasks/.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative plan item path."),
+        path: z.string().min(1).describe("Project-relative task path."),
       }),
     }
   )
@@ -440,12 +451,12 @@ export function resolveAgentTools(toolNames, scope) {
     save_generated_markdown: () => createSaveGeneratedMarkdownTool(scope),
     append_activity_log: () => createAppendActivityLogTool(scope),
     send_email_ses: () => createSendSesEmailTool(),
-    list_plan_items: () => createListPlanItemsTool(scope),
-    read_plan_item: () => createReadPlanItemTool(scope),
-    create_plan_item: () => createCreatePlanItemTool(scope),
-    update_plan_item: () => createUpdatePlanItemTool(scope),
-    toggle_plan_item: () => createTogglePlanItemTool(scope),
-    delete_plan_item: () => createDeletePlanItemTool(scope),
+    list_tasks: () => createListTasksTool(scope),
+    read_task: () => createReadTaskTool(scope),
+    create_task: () => createCreateTaskTool(scope),
+    update_task: () => createUpdateTaskTool(scope),
+    toggle_task: () => createToggleTaskTool(scope),
+    delete_task: () => createDeleteTaskTool(scope),
   }
 
   return toolNames.filter((name) => name !== "filesystem").map((name) => {
