@@ -73,11 +73,13 @@ data/<vault>/
           000001.md
         system.jsonl
       work/
-  runtime/
-    chats/
 ```
 
-Note: `runtime/chats` is conceptual. Chat history should not be versioned in the Git vault.
+Runtime chat history is stored outside the Git vault:
+
+```txt
+data/runtime/<vault>/chats/
+```
 
 ## Project Structure
 
@@ -508,11 +510,7 @@ Decisions:
 - better saved outside the vault, for example in runtime data;
 - steps shown in the UI are telemetry/tool/runtime events, not private chain-of-thought.
 
-Possible options:
-
-- default: `data/runtime/chats`;
-- env for an alternative path;
-- future option for teams that want to version or export chats.
+Current default: `data/runtime/<vault>/chats`.
 
 ## Mentions
 

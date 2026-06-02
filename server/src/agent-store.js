@@ -5,12 +5,10 @@ import path from "node:path"
 import { pipeline } from "node:stream/promises"
 
 import { appendSystemLogEvent } from "./system-log.js"
-import { dataRootDir, vaultDir } from "./storage.js"
+import { dataRootDir, vaultName } from "./storage.js"
 
 const USER_KEY_LENGTH = 12
-const assistantThreadsDir = path.join(vaultDir, ".assistant", "threads")
-const currentChatsDir = assistantThreadsDir
-const legacyChatsDir = path.join(dataRootDir, "chats")
+const runtimeChatsDir = path.join(dataRootDir, "runtime", vaultName, "chats")
 
 function nowIso() {
   return new Date().toISOString()
@@ -51,21 +49,14 @@ function activeThreadPath(threadId, userKey) {
   assertThreadId(threadId)
   assertUserKey(userKey)
 
-  return path.join(currentChatsDir, userKey, `${threadId}.json`)
-}
-
-function legacyThreadPath(threadId, userKey) {
-  assertThreadId(threadId)
-  assertUserKey(userKey)
-
-  return path.join(legacyChatsDir, userKey, `${threadId}.json`)
+  return path.join(runtimeChatsDir, userKey, `${threadId}.json`)
 }
 
 function threadAttachmentDir(threadId, userKey) {
   assertThreadId(threadId)
   assertUserKey(userKey)
 
-  return path.join(assistantThreadsDir, userKey, threadId, "attachments")
+  return path.join(runtimeChatsDir, userKey, threadId, "attachments")
 }
 
 function cleanFileName(input) {
@@ -100,13 +91,13 @@ function serializeThread(thread) {
 }
 
 async function ensureChatsDir() {
-  await fs.mkdir(currentChatsDir, { recursive: true })
+  await fs.mkdir(runtimeChatsDir, { recursive: true })
 }
 
 async function ensureUserChatsDir(userKey) {
   assertUserKey(userKey)
   await ensureChatsDir()
-  await fs.mkdir(path.join(currentChatsDir, userKey), { recursive: true })
+  await fs.mkdir(path.join(runtimeChatsDir, userKey), { recursive: true })
 }
 
 async function readThreadFile(filePath) {
@@ -114,15 +105,7 @@ async function readThreadFile(filePath) {
 }
 
 async function readActiveThreadFile(threadId, userKey) {
-  try {
-    return await readThreadFile(activeThreadPath(threadId, userKey))
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error
-    }
-
-    return readThreadFile(legacyThreadPath(threadId, userKey))
-  }
+  return readThreadFile(activeThreadPath(threadId, userKey))
 }
 
 function publicThread(thread) {
@@ -131,6 +114,7 @@ function publicThread(thread) {
     title: thread.title,
     agentId: thread.agentId ?? "assistant",
     projectId: thread.projectId ?? null,
+    skills: thread.skills ?? [],
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
   }
@@ -218,43 +202,36 @@ export async function listAgentThreads(options = {}) {
   assertUserKey(options.userKey ?? "")
   await ensureUserChatsDir(options.userKey)
   const expectedProjectId = options.projectId ?? null
-  const directories = [
-    path.join(currentChatsDir, options.userKey),
-    path.join(legacyChatsDir, options.userKey),
-  ]
-  const threadsById = new Map()
+  const directory = path.join(runtimeChatsDir, options.userKey)
+  let entries = []
+  const threads = []
 
-  for (const directory of directories) {
-    let entries = []
-
-    try {
-      entries = await fs.readdir(directory, { withFileTypes: true })
-    } catch (error) {
-      if (error.code === "ENOENT") {
-        continue
-      }
-
-      throw error
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true })
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return []
     }
 
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) {
-        continue
-      }
+    throw error
+  }
 
-      try {
-        const thread = await readThreadFile(path.join(directory, entry.name))
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      continue
+    }
 
-        if ((thread.projectId ?? null) === expectedProjectId && !threadsById.has(thread.id)) {
-          threadsById.set(thread.id, publicThread(thread))
-        }
-      } catch {
-        continue
+    try {
+      const thread = await readThreadFile(path.join(directory, entry.name))
+
+      if ((thread.projectId ?? null) === expectedProjectId) {
+        threads.push(publicThread(thread))
       }
+    } catch {
+      continue
     }
   }
 
-  const threads = [...threadsById.values()]
   return threads.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
@@ -267,6 +244,7 @@ export async function createAgentThread(input, options = {}) {
     title: input.title ?? null,
     agentId: input.agentId ?? "assistant",
     projectId: input.projectId ?? null,
+    skills: input.skills ?? [],
     userKey,
     userEmail: options.userEmail ?? null,
     createdAt: timestamp,
@@ -316,15 +294,6 @@ export async function deleteAgentThread(threadId, userKey) {
     }
   }
 
-  try {
-    await fs.unlink(legacyThreadPath(threadId, userKey))
-    deleted = true
-  } catch (error) {
-    if (error.code !== "ENOENT" && error.statusCode !== 404) {
-      throw error
-    }
-  }
-
   if (!deleted) {
     return false
   }
@@ -359,7 +328,6 @@ export async function appendAgentMessage(threadId, input, userKey) {
     id: randomUUID(),
     role: input.role,
     content: input.content,
-    selectedRole: input.selectedRole ?? null,
     runId: input.runId ?? null,
     attachments: attachments.map(publicAttachment),
     createdAt: timestamp,
@@ -402,7 +370,7 @@ export async function saveAgentThreadAttachment(threadId, filePart, userKey) {
   const attachment = {
     id: randomUUID(),
     name: path.basename(target),
-    path: path.relative(vaultDir, target).split(path.sep).join("/"),
+    path: path.relative(dataRootDir, target).split(path.sep).join("/"),
     mimeType: String(filePart.mimetype ?? "application/octet-stream"),
     size: stat.size,
     createdAt: timestamp,
@@ -433,8 +401,8 @@ export async function readAgentThreadAttachment(threadId, attachmentId, userKey)
     throw Object.assign(new Error("Attachment not found"), { statusCode: 404 })
   }
 
-  const fullPath = path.resolve(vaultDir, attachment.path)
-  const relative = path.relative(vaultDir, fullPath)
+  const fullPath = path.resolve(dataRootDir, attachment.path)
+  const relative = path.relative(dataRootDir, fullPath)
 
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw Object.assign(new Error("Invalid attachment path"), { statusCode: 400 })

@@ -6,7 +6,6 @@ import {
   Activity01Icon,
   AddCircleIcon,
   AiChat01Icon,
-  ArrowDown03Icon,
   ArrowUp03Icon,
   Copy01Icon,
   DarkModeIcon,
@@ -133,7 +132,6 @@ import {
   getProjectActivity,
   getSystemLog,
   listMyInbox,
-  listAssistantRoles,
   listAgentThreads,
   listDocs,
   listMcpTokens,
@@ -163,7 +161,7 @@ import {
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectFolder, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
-import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
+import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
 const EMPTY_DOCS: DocsSummary[] = []
@@ -709,7 +707,7 @@ type PendingLogFile = {
   size: number
 }
 
-function movePathParts(pathValue: string) {
+function movePathParts(pathValue: string): { folder: string; name: string; root: "resources" | "work" } {
   const parts = pathValue.split("/").filter(Boolean)
   const root = parts[0] === "work" ? "work" : "resources"
 
@@ -2024,8 +2022,6 @@ function AssistantChatView({
   isSending,
   messages,
   pendingAttachments,
-  roles,
-  selectedRole,
   selectedThreadId,
   thoughts,
   threads,
@@ -2036,7 +2032,6 @@ function AssistantChatView({
   onAttachmentUpload,
   onNewThread,
   onOpenProjectFile,
-  onRoleChange,
   onSubmit,
   onThoughtStepToggle,
   onThoughtToggle,
@@ -2054,8 +2049,6 @@ function AssistantChatView({
   isSending: boolean
   messages: AgentMessage[]
   pendingAttachments: AgentAttachment[]
-  roles: AssistantRole[]
-  selectedRole: string
   selectedThreadId: string | null
   thoughts: ThoughtRun[]
   threads: AgentThread[]
@@ -2066,7 +2059,6 @@ function AssistantChatView({
   onAttachmentUpload: (files: File[]) => void
   onNewThread: () => void
   onOpenProjectFile?: (path: string) => void
-  onRoleChange: (value: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onThoughtStepToggle: (runId: string, stepId: string, open: boolean) => void
   onThoughtToggle: (runId: string, open: boolean) => void
@@ -2080,9 +2072,6 @@ function AssistantChatView({
     query: "",
   })
   const [threadMenuValue, setThreadMenuValue] = useState("")
-  const vaultRoles = roles.filter((role) => role.scope === "vault")
-  const projectRoles = roles.filter((role) => role.scope === "project")
-  const hasRoles = roles.length > 0
   const thoughtsByUserMessageId = new Map(thoughts.map((thought) => [thought.userMessageId, thought]))
   const activeThought = [...thoughts].reverse().find((thought) => thought.status === "running")
   const isEmpty = !isLoading && messages.length === 0 && !draft
@@ -2290,7 +2279,7 @@ function AssistantChatView({
               <div className="max-w-xl">
                 <h3 className="text-3xl font-semibold tracking-tight text-foreground">New chat</h3>
                 <p className="mt-3 text-[15px] leading-7 text-muted-foreground">
-                  Dimmi cosa vuoi costruire, sistemare o esplorare.
+                  Tell me what you want to build, fix, or explore.
                 </p>
               </div>
             </div>
@@ -2479,42 +2468,6 @@ function AssistantChatView({
               </button>
               {isUploadingAttachment ? (
                 <span className="text-xs text-muted-foreground">Uploading...</span>
-              ) : null}
-
-              {hasRoles ? (
-                <label className="inline-flex min-w-0 items-center gap-2 rounded-full px-1 py-0.5 text-[12px] text-foreground">
-                  <select
-                    className="max-w-56 appearance-none bg-transparent pr-4 outline-none"
-                    disabled={isSending}
-                    onChange={(event) => onRoleChange(event.target.value)}
-                    value={selectedRole}
-                  >
-                    <option value="">Default</option>
-                    {vaultRoles.length ? (
-                      <optgroup label="Vault roles">
-                        {vaultRoles.map((role) => (
-                          <option key={role.slug} value={role.slug}>
-                            {role.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ) : null}
-                    {projectRoles.length ? (
-                      <optgroup label="Project roles">
-                        {projectRoles.map((role) => (
-                          <option key={role.slug} value={role.slug}>
-                            {role.overridesVault ? `${role.name} · overrides vault` : role.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ) : null}
-                  </select>
-                  <HugeiconsIcon
-                    className="size-3.5 text-muted-foreground"
-                    icon={ArrowDown03Icon}
-                    strokeWidth={2}
-                  />
-                </label>
               ) : null}
 
               <div className="ml-auto flex items-center gap-2">
@@ -4242,7 +4195,6 @@ function WorkspaceApp({
   const [createProjectTags, setCreateProjectTags] = useState("")
   const [gitResult, setGitResult] = useState<GitActionResult | null>(null)
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(initialRoute.agentThreadId)
-  const [selectedAssistantRole, setSelectedAssistantRole] = useState("")
   const [agentInput, setAgentInput] = useState("")
   const [agentDraft, setAgentDraft] = useState("")
   const [agentError, setAgentError] = useState<string | null>(null)
@@ -4334,11 +4286,6 @@ function WorkspaceApp({
   const assistantQuery = useQuery({
     queryKey: ["assistant", selectedProjectId ?? "global"],
     queryFn: () => getAssistantConfig(selectedProjectId),
-    enabled: mainView === "agents",
-  })
-  const assistantRolesQuery = useQuery({
-    queryKey: ["assistant-roles", selectedProjectId ?? "global"],
-    queryFn: () => listAssistantRoles(selectedProjectId),
     enabled: mainView === "agents",
   })
   const automationsQuery = useQuery({
@@ -4492,17 +4439,6 @@ function WorkspaceApp({
       })
     })
   }, [mainView])
-
-  useEffect(() => {
-    if (!selectedAssistantRole) {
-      return
-    }
-
-    const roles = assistantRolesQuery.data?.items ?? []
-    if (assistantRolesQuery.isFetched && !roles.some((role) => role.slug === selectedAssistantRole)) {
-      setSelectedAssistantRole("")
-    }
-  }, [assistantRolesQuery.data?.items, assistantRolesQuery.isFetched, selectedAssistantRole])
 
   useEffect(() => {
     if (mainView !== "agents") {
@@ -5176,7 +5112,7 @@ function WorkspaceApp({
       }
 
       const attachmentIds = agentPendingAttachments.map((attachment) => attachment.id)
-      const response = await sendAgentMessage(threadId, content, selectedAssistantRole, attachmentIds, threadTitle)
+      const response = await sendAgentMessage(threadId, content, attachmentIds, threadTitle)
       const assistantRunId = response.run.id
       const userMessageId = response.userMessage.id
 
@@ -5690,7 +5626,6 @@ function WorkspaceApp({
 
   const canWrite = Boolean(selectedProjectId) && !busyAction
   const entries = projectQuery.data?.activity?.entries ?? []
-  const assistantRoles = assistantRolesQuery.data?.items ?? []
   const automations = automationsQuery.data?.items ?? []
   const pendingAutomation = automations.find((automation) => automation.id === pendingAutomationId) ?? null
   const busyAutomationId = busyAction?.startsWith("automation:") ? busyAction.slice("automation:".length) : null
@@ -6715,13 +6650,11 @@ function WorkspaceApp({
                       error={agentError}
                       input={agentInput}
                       isAddingToArtifacts={busyAction === "assistant-artifact"}
-                      isLoading={assistantQuery.isLoading || assistantRolesQuery.isLoading || agentThreadsQuery.isLoading || agentThreadQuery.isLoading}
+                      isLoading={assistantQuery.isLoading || agentThreadsQuery.isLoading || agentThreadQuery.isLoading}
                       isSending={isAgentSending}
                       isUploadingAttachment={isUploadingAgentAttachment}
                       messages={agentMessages}
                       pendingAttachments={agentPendingAttachments}
-                      roles={assistantRoles}
-                      selectedRole={selectedAssistantRole}
                       selectedThreadId={selectedAgentThreadId}
                       thoughts={selectedAssistantThoughts}
                       threads={agentThreads}
@@ -6732,7 +6665,6 @@ function WorkspaceApp({
                       onInputChange={setAgentInput}
                       onNewThread={handleNewAgentThread}
                       onOpenProjectFile={handleOpenProjectFileLink}
-                      onRoleChange={setSelectedAssistantRole}
                       onSubmit={handleAgentSubmit}
                       onThoughtStepToggle={handleAssistantThoughtStepToggle}
                       onThoughtToggle={handleAssistantThoughtToggle}

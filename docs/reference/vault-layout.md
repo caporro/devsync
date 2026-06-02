@@ -7,8 +7,11 @@ data/<vault>/
   README.md
   assistant.md
   vault-plan.json
-  roles/
-    architect.md
+  config/
+    skills.json
+  skills/
+    project-status/
+      SKILL.md
   automations/
     update-situation.md
   docs/
@@ -19,8 +22,6 @@ data/<vault>/
       project.json
       README.md
       assistant.md
-      roles/
-        qa.md
       automations/
         daily-digest.md
       resources/
@@ -35,8 +36,12 @@ data/<vault>/
           2026-05.md
       work/
         situation.md
-  .assistant/
-    threads/
+```
+
+Assistant chat runtime is outside the vault:
+
+```txt
+data/runtime/<vault>/chats/
 ```
 
 ## Root
@@ -46,11 +51,11 @@ data/<vault>/
 | `README.md` | General vault notes. |
 | `assistant.md` | Global Assistant instructions. |
 | `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `resources/...`, `tasks/...`, or `work/...` path when the task has `projectId`. |
-| `roles/` | Global Assistant roles. |
+| `config/skills.json` | Vault skill config, including disabled system skills. |
+| `skills/` | Vault Assistant skills. |
 | `automations/` | Global automations. |
 | `docs/` | Team documentation not tied to a single project. |
 | `projects/` | Projects. |
-| `.assistant/threads/` | Assistant chat threads and attachments. |
 
 ## Project
 
@@ -59,7 +64,6 @@ data/<vault>/
 | `project.json` | Project metadata. |
 | `README.md` | Main project notes. |
 | `assistant.md` | Project Assistant instructions. |
-| `roles/` | Project-specific roles. |
 | `automations/` | Project-specific automations. |
 | `resources/` | Raw material, inputs, sources, uploads, links, and notes. |
 | `tasks/` | Project tasks. |
@@ -73,6 +77,8 @@ data/<vault>/
 | `tasks/README.md` | Task index. |
 | `logs/activity/*` | Activity log segments. |
 | `work/*.md` | Assistant/automation/person-produced outputs. |
+
+Assistant resolution details: [assistant.md](assistant.md).
 
 ## Legacy Compatibility
 

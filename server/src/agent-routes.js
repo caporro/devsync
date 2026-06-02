@@ -4,14 +4,8 @@ import path from "node:path"
 import { z } from "zod"
 
 import {
-  createAssistantRole,
-  deleteAssistantRole,
   formatAssistantForApi,
-  formatRoleForApi,
   getAssistantConfig,
-  listAssistantRoles,
-  readAssistantRole,
-  updateAssistantRole,
 } from "./assistant-config.js"
 import {
   formatAutomationForApi,
@@ -33,11 +27,13 @@ import {
 } from "./agent-store.js"
 import {
   appendAgentRunEvent,
+  canSubscribeToAgentRunStream,
   createAgentRunStream,
   subscribeToAgentRunStream,
 } from "./agent-run-streams.js"
 import { runAgent } from "./agent-runtime.js"
 import { readProjectFileBuffer } from "./storage.js"
+import { getSkillCatalog } from "./skills.js"
 
 const CreateThreadBody = z.object({
   title: z.string().trim().min(1).nullable().optional(),
@@ -48,26 +44,7 @@ const CreateThreadBody = z.object({
 const CreateMessageBody = z.object({
   content: z.string().trim().min(1),
   attachmentIds: z.array(z.string().trim().min(1)).optional(),
-  selectedRole: z.string().trim().min(1).nullable().optional(),
   title: z.string().trim().min(1).nullable().optional(),
-})
-
-const RoleScope = z.enum(["vault", "project"])
-
-const SaveRoleBody = z.object({
-  scope: RoleScope,
-  projectId: z.string().trim().min(1).nullable().optional(),
-  slug: z.string().trim().min(1).optional(),
-  name: z.string().trim().min(1).optional(),
-  description: z.string().optional(),
-  content: z.string().optional(),
-})
-
-const UpdateRoleBody = z.object({
-  projectId: z.string().trim().min(1).nullable().optional(),
-  name: z.string().trim().min(1).optional(),
-  description: z.string().optional(),
-  content: z.string().optional(),
 })
 
 const RunAutomationBody = z.object({
@@ -249,8 +226,6 @@ async function executeThreadRun({ threadId, runId, requestLog, threadUser }) {
   try {
     const history = await getAgentThread(threadId, threadUser.key)
     const agent = await getAssistantConfig(history.thread.projectId)
-    const lastUserMessage = [...history.messages].reverse().find((message) => message.role === "user")
-    const selectedRole = lastUserMessage?.selectedRole ?? null
     const runtimeMessages = await buildRuntimeMessages({ history, threadId, threadUser, emit })
     await persistQueue
 
@@ -258,7 +233,7 @@ async function executeThreadRun({ threadId, runId, requestLog, threadUser }) {
       agent,
       projectId: history.thread.projectId,
       messages: runtimeMessages,
-      selectedRole,
+      skills: history.thread.skills ?? [],
       eventSink: emit,
       log: requestLog,
     })
@@ -290,92 +265,6 @@ export async function registerAgentRoutes(app, auth) {
   app.get("/api/assistant", async (request) => {
     const projectId = request.query?.projectId ? String(request.query.projectId) : null
     return formatAssistantForApi(await getAssistantConfig(projectId))
-  })
-
-  app.get("/api/assistant/roles", async (request) => {
-    const projectId = request.query?.projectId ? String(request.query.projectId) : null
-    const roles = await listAssistantRoles({ projectId })
-
-    return {
-      items: roles.map(formatRoleForApi),
-    }
-  })
-
-  app.get("/api/assistant/roles/:scope/:slug", async (request, reply) => {
-    const scope = RoleScope.safeParse(request.params.scope)
-    if (!scope.success) {
-      reply.code(400).send({ error: "Invalid role scope" })
-      return
-    }
-
-    const projectId = request.query?.projectId ? String(request.query.projectId) : null
-    const role = await readAssistantRole(scope.data, request.params.slug, projectId)
-
-    if (!role) {
-      reply.code(404).send({ error: "Role not found" })
-      return
-    }
-
-    return formatRoleForApi(role)
-  })
-
-  app.post("/api/assistant/roles", async (request, reply) => {
-    const parsed = SaveRoleBody.safeParse(request.body ?? {})
-
-    if (!parsed.success) {
-      reply.code(400).send({ error: "Invalid request body", details: parsed.error.flatten() })
-      return
-    }
-
-    if (!parsed.data.name && !parsed.data.slug) {
-      reply.code(400).send({ error: "Role name or slug is required" })
-      return
-    }
-
-    const role = await createAssistantRole(parsed.data)
-    reply.code(201).send(formatRoleForApi(role))
-  })
-
-  app.put("/api/assistant/roles/:scope/:slug", async (request, reply) => {
-    const scope = RoleScope.safeParse(request.params.scope)
-    if (!scope.success) {
-      reply.code(400).send({ error: "Invalid role scope" })
-      return
-    }
-
-    const parsed = UpdateRoleBody.safeParse(request.body ?? {})
-
-    if (!parsed.success) {
-      reply.code(400).send({ error: "Invalid request body", details: parsed.error.flatten() })
-      return
-    }
-
-    const role = await updateAssistantRole(scope.data, request.params.slug, parsed.data)
-
-    if (!role) {
-      reply.code(404).send({ error: "Role not found" })
-      return
-    }
-
-    return formatRoleForApi(role)
-  })
-
-  app.delete("/api/assistant/roles/:scope/:slug", async (request, reply) => {
-    const scope = RoleScope.safeParse(request.params.scope)
-    if (!scope.success) {
-      reply.code(400).send({ error: "Invalid role scope" })
-      return
-    }
-
-    const projectId = request.query?.projectId ? String(request.query.projectId) : null
-    const deleted = await deleteAssistantRole(scope.data, request.params.slug, projectId)
-
-    if (!deleted) {
-      reply.code(404).send({ error: "Role not found" })
-      return
-    }
-
-    reply.code(204).send()
   })
 
   app.get("/api/agents", async (request) => {
@@ -449,11 +338,13 @@ export async function registerAgentRoutes(app, auth) {
 
     const projectId = parsed.data.projectId ?? null
     const assistant = await getAssistantConfig(projectId)
+    const skills = await getSkillCatalog()
 
     reply.code(201).send(await createAgentThread({
       title: parsed.data.title ?? null,
       agentId: assistant.id,
       projectId,
+      skills,
     }, {
       userKey: threadUser.key,
       userEmail: threadUser.email,
@@ -527,12 +418,14 @@ export async function registerAgentRoutes(app, auth) {
       role: "user",
       content: parsed.data.content,
       attachmentIds: parsed.data.attachmentIds ?? [],
-      selectedRole: parsed.data.selectedRole ?? null,
       threadTitle: parsed.data.title ?? null,
       runId,
     }, threadUser.key)
 
-    createAgentRunStream(runId)
+    createAgentRunStream(runId, {
+      threadId: request.params.threadId,
+      userKey: threadUser.key,
+    })
     await createAgentRun(request.params.threadId, {
       id: runId,
       userMessageId: userMessage.id,
@@ -564,13 +457,26 @@ export async function registerAgentRoutes(app, auth) {
   })
 
   app.get("/api/agent-runs/:runId/stream", async (request, reply) => {
+    const threadUser = threadUserFromRequest(request, auth)
+    const access = canSubscribeToAgentRunStream(request.params.runId, { userKey: threadUser.key })
+
+    if (access === "missing") {
+      reply.code(404).send({ error: "Run stream not found" })
+      return
+    }
+
+    if (access === "forbidden") {
+      reply.code(403).send({ error: "Forbidden" })
+      return
+    }
+
     reply.raw.setHeader("Content-Type", "text/event-stream")
     reply.raw.setHeader("Cache-Control", "no-cache")
     reply.raw.setHeader("Connection", "keep-alive")
     reply.raw.flushHeaders()
 
     let closed = false
-    const subscription = subscribeToAgentRunStream(request.params.runId, (event) => {
+    const subscription = subscribeToAgentRunStream(request.params.runId, { userKey: threadUser.key }, (event) => {
       if (closed) {
         return
       }
@@ -582,7 +488,7 @@ export async function registerAgentRoutes(app, auth) {
       }
     })
 
-    if (!subscription) {
+    if (!subscription || subscription.unauthorized) {
       reply.raw.end()
       return reply
     }

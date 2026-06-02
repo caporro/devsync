@@ -73,14 +73,49 @@ const LOGIN_USER_LIMIT = Number(process.env.DEVSYNC_LOGIN_USER_LIMIT ?? 8)
 const LOGIN_IP_LIMIT = Number(process.env.DEVSYNC_LOGIN_IP_LIMIT ?? 30)
 const MCP_AUTH_LIMIT = Number(process.env.DEVSYNC_MCP_AUTH_LIMIT ?? 60)
 const MCP_TOKEN_CREATE_LIMIT = Number(process.env.DEVSYNC_MCP_TOKEN_CREATE_LIMIT ?? 10)
+const SECURITY_HEADERS = {
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "connect-src 'self'",
+    "font-src 'self' data:",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data: blob: https:",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "worker-src 'self' blob:",
+  ].join("; "),
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+}
 
 await ensureDataDir()
+
+function apiTokenUser() {
+  return { username: "api-token", email: "api-token", name: "API token", authMode: "api-token" }
+}
 
 function hasValidApiToken(request) {
   const authorization = request.headers.authorization ?? ""
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : request.headers["x-devsync-token"]
 
   return Boolean(apiToken && token === apiToken)
+}
+
+function currentApiUser(request) {
+  if (hasValidApiToken(request)) {
+    return apiTokenUser()
+  }
+
+  if (apiToken && !auth.isEnabled) {
+    return null
+  }
+
+  return auth.currentUser(request)
 }
 
 function bearerToken(request) {
@@ -112,7 +147,7 @@ function applyRateLimitReply(reply, blocked) {
 
 async function currentMcpUser(request) {
   if (hasValidApiToken(request)) {
-    return { username: "api-token", email: "api-token", name: "API token", authMode: "api-token" }
+    return apiTokenUser()
   }
 
   if (!auth.isEnabled && !apiToken) {
@@ -162,7 +197,7 @@ function requireAuth(request, reply, done) {
     return
   }
 
-  if (auth.currentUser(request)) {
+  if (currentApiUser(request)) {
     done()
     return
   }
@@ -301,6 +336,14 @@ async function deleteProjectTaskLegacy(request, reply) {
 
 await ensureDataDir()
 
+app.addHook("onRequest", (_request, reply, done) => {
+  for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
+    reply.header(header, value)
+  }
+
+  done()
+})
+
 if (process.env.NODE_ENV !== "test") {
   const gitBootstrap = await ensureVaultGit()
   if (!gitBootstrap.ok) {
@@ -378,7 +421,7 @@ app.route({
 })
 
 app.get("/api/auth/me", async (request, reply) => {
-  const user = auth.currentUser(request)
+  const user = currentApiUser(request)
 
   if (!user) {
     reply.code(401).send({ authenticated: false, authMode: auth.mode, error: "Unauthorized" })
@@ -426,6 +469,17 @@ app.post("/api/my/inbox/read", async (request, reply) => {
 })
 
 app.post("/api/auth/login", async (request, reply) => {
+  if (apiToken && !auth.isEnabled) {
+    const user = currentApiUser(request)
+    if (!user) {
+      reply.code(401).send({ error: "API token required" })
+      return
+    }
+
+    reply.send({ authenticated: true, authMode: user.authMode, user })
+    return
+  }
+
   const body = request.body ?? {}
   const username = String(body.email ?? body.username ?? "").trim()
   const password = String(body.password ?? "")

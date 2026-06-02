@@ -18,6 +18,7 @@ import {
   updateTask,
 } from "./storage.js"
 import { appendMentionEvents } from "./mentions.js"
+import { readSkill } from "./skills.js"
 import { appendSystemLogEvent } from "./system-log.js"
 
 const ACTIVITY_INLINE_MAX_CHARS = Number(process.env.DEVSYNC_ACTIVITY_INLINE_MAX_CHARS ?? 800)
@@ -451,8 +452,31 @@ function createSendSesEmailTool() {
   )
 }
 
+function createUseSkillTool(scope) {
+  return tool(
+    async ({ name }) => {
+      const skill = await readSkill(name, { allowedSkills: scope.skills ?? [] })
+
+      return {
+        name: skill.name,
+        description: skill.description,
+        source: skill.source,
+        instructions: skill.content,
+      }
+    },
+    {
+      name: "use_skill",
+      description: "Load the full instructions for an available Devsync skill by name.",
+      schema: z.object({
+        name: z.string().min(1).describe("Skill name from the available_skills list."),
+      }),
+    }
+  )
+}
+
 export function resolveAgentTools(toolNames, scope) {
   const registry = {
+    use_skill: () => createUseSkillTool(scope),
     save_generated_markdown: () => createSaveGeneratedMarkdownTool(scope),
     append_activity_log: () => createAppendActivityLogTool(scope),
     send_email_ses: () => createSendSesEmailTool(),

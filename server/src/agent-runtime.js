@@ -6,6 +6,7 @@ import { resolveAgentTools } from "./agent-tools.js"
 import { AiToolLogHandler, summarizeToolPayload } from "./ai-logging.js"
 import { resolveChatModel } from "./model-resolver.js"
 import { filesystemPermissions, hasFilesystemTool } from "./runtime-permissions.js"
+import { formatSkillCatalogForPrompt } from "./skills.js"
 import { vaultName } from "./storage.js"
 
 function contentToText(content) {
@@ -43,20 +44,54 @@ function safeError(error) {
   }
 }
 
-async function buildSystemPrompt(assistant, scope, selectedRole) {
+function promptList(items, fallback = "none") {
+  const values = (items ?? [])
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+
+  return values.length ? values.join(", ") : fallback
+}
+
+function promptPathList(items) {
+  const values = (items ?? [])
+    .map((item) => {
+      const clean = String(item ?? "").trim().replace(/^\/+/, "")
+      return clean === "**" || clean === "**/*" ? "- /**" : `- /${clean}`
+    })
+    .filter((item) => item !== "- /")
+
+  return values.length ? values.join("\n") : "- none"
+}
+
+async function buildSystemPrompt(assistant, scope, skills = []) {
   const virtualRoot = scope.projectId
     ? `data/${vaultName}/projects/${scope.projectId}`
     : `data/${vaultName}`
-  const instructionContext = await loadAssistantInstructionContext(scope.projectId, selectedRole)
+  const instructionContext = await loadAssistantInstructionContext(scope.projectId)
+  const skillCatalog = formatSkillCatalogForPrompt(skills)
+  const environment = [
+    "<devsync_environment>",
+    `Current vault: ${vaultName}`,
+    `Current working area id: ${scope.projectId ?? "vault"}`,
+    `Mounted root: ${virtualRoot}`,
+    `Mounted root is exposed to tools as virtual /`,
+    `Current local time: ${localTimestamp()}`,
+    `Enabled tools: ${promptList(assistant.tools)}`,
+    "Readable paths:",
+    promptPathList(assistant.read),
+    "Writable paths:",
+    promptPathList(assistant.write),
+    "</devsync_environment>",
+  ].join("\n")
 
   return [
     BASE_ASSISTANT_PROMPT,
-    `Current local time: ${localTimestamp()}.`,
-    `Filesystem root mounted as virtual / is ${virtualRoot}.`,
+    environment,
     "Use virtual paths only. Do not use absolute host paths.",
     "Use only enabled tools and declared filesystem permissions.",
-    "For project output, write only with explicit user intent.",
+    "For filesystem output, write only with explicit user intent.",
     instructionContext,
+    skillCatalog,
   ].filter(Boolean).join("\n\n")
 }
 
@@ -105,7 +140,7 @@ class AgentStreamHandler extends BaseCallbackHandler {
   }
 }
 
-export async function runAgent({ agent, projectId, messages, selectedRole = null, eventSink, log }) {
+export async function runAgent({ agent, projectId, messages, skills = [], eventSink, log }) {
   const scope = { projectId: projectId ?? null }
   const permissions = filesystemPermissions({
     enabled: hasFilesystemTool(agent.tools),
@@ -118,11 +153,11 @@ export async function runAgent({ agent, projectId, messages, selectedRole = null
     agentId: agent.id,
     key: agent.key,
     projectId: projectId ?? null,
-    selectedRole,
     model: agent.model,
     tools: agent.tools,
     read: agent.read,
     write: agent.write,
+    skills: skills.map((skill) => skill.name),
     permissions,
     messages: messages.length,
     scopeRoot,
@@ -131,8 +166,8 @@ export async function runAgent({ agent, projectId, messages, selectedRole = null
   try {
     log?.info({ agentId: agent.id, model: agent.model }, "agent resolving model")
     const model = await resolveChatModel(agent.model)
-    const tools = resolveAgentTools(agent.tools, { ...scope, read: agent.read, write: agent.write })
-    const systemPrompt = await buildSystemPrompt(agent, scope, selectedRole)
+    const tools = resolveAgentTools(agent.tools, { ...scope, read: agent.read, write: agent.write, skills })
+    const systemPrompt = await buildSystemPrompt(agent, scope, skills)
 
     log?.info({
       agentId: agent.id,
@@ -166,7 +201,7 @@ export async function runAgent({ agent, projectId, messages, selectedRole = null
     )
 
     const answer = contentToText(result.messages?.at(-1)?.content).trim()
-      || "L'agente non ha prodotto una risposta testuale."
+      || "The agent did not produce a text response."
 
     log?.info({
       agentId: agent.id,

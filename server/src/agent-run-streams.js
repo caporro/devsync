@@ -2,7 +2,7 @@ const streams = new Map()
 const TERMINAL_EVENTS = new Set(["run_completed", "error"])
 const CLEANUP_MS = 5 * 60 * 1000
 
-function getStream(runId) {
+function getStream(runId, metadata = {}) {
   let stream = streams.get(runId)
 
   if (!stream) {
@@ -11,8 +11,13 @@ function getStream(runId) {
       listeners: new Set(),
       terminal: false,
       cleanupTimer: null,
+      threadId: metadata.threadId ?? null,
+      userKey: metadata.userKey ?? null,
     }
     streams.set(runId, stream)
+  } else {
+    stream.threadId = stream.threadId ?? metadata.threadId ?? null
+    stream.userKey = stream.userKey ?? metadata.userKey ?? null
   }
 
   if (stream.cleanupTimer) {
@@ -29,8 +34,20 @@ function scheduleCleanup(runId, stream) {
   }, CLEANUP_MS)
 }
 
-export function createAgentRunStream(runId) {
-  getStream(runId)
+function canUseStream(stream, metadata = {}) {
+  if (stream.userKey && metadata.userKey && stream.userKey !== metadata.userKey) {
+    return false
+  }
+
+  if (stream.threadId && metadata.threadId && stream.threadId !== metadata.threadId) {
+    return false
+  }
+
+  return true
+}
+
+export function createAgentRunStream(runId, metadata = {}) {
+  getStream(runId, metadata)
 }
 
 export function appendAgentRunEvent(runId, event, data) {
@@ -48,11 +65,29 @@ export function appendAgentRunEvent(runId, event, data) {
   }
 }
 
-export function subscribeToAgentRunStream(runId, listener) {
+export function canSubscribeToAgentRunStream(runId, metadata = {}) {
+  const stream = streams.get(runId)
+
+  if (!stream) {
+    return "missing"
+  }
+
+  return canUseStream(stream, metadata) ? "ok" : "forbidden"
+}
+
+export function subscribeToAgentRunStream(runId, metadata = {}, listener) {
   const stream = streams.get(runId)
 
   if (!stream) {
     return null
+  }
+
+  if (!canUseStream(stream, metadata)) {
+    return {
+      terminal: true,
+      unauthorized: true,
+      unsubscribe: () => undefined,
+    }
   }
 
   for (const event of stream.events) {

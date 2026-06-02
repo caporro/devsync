@@ -238,7 +238,9 @@ data/<vault>/
   README.md
   assistant.md
   vault-plan.json
-  roles/
+  config/
+    skills.json
+  skills/
   automations/
   docs/
   projects/
@@ -246,12 +248,17 @@ data/<vault>/
       project.json
       README.md
       assistant.md
-      roles/
       automations/
       resources/
       tasks/
       logs/
       work/
+```
+
+Assistant chat history is runtime data, not vault data:
+
+```txt
+data/runtime/<vault>/chats/
 ```
 
 Meaning:
@@ -264,7 +271,8 @@ Meaning:
 - `tasks/`: tasks, owner, deadline, and index;
 - `work/`: produced or refined material from Assistant, automations, or people;
 - `assistant.md`: AI instructions;
-- `roles/`: prompt specializations;
+- `config/skills.json`: disabled system skill config;
+- `skills/`: vault Assistant skills;
 - `automations/`: automations.
 
 The vault can be versioned with Git. Git sync helps, but it does not replace a full backup.
@@ -273,7 +281,7 @@ Detailed layout: [docs/reference/vault-layout.md](docs/reference/vault-layout.md
 
 ## Automate
 
-Devsync automates work through Assistant, roles, and automations.
+Devsync automates work through Assistant, skills, and automations.
 
 Global Assistant:
 
@@ -293,9 +301,25 @@ Instruction order:
 base Devsync
 + vault assistant
 + project assistant
-+ selected role
++ skill catalog
 + chat history
 ```
+
+Vault skill config:
+
+```json
+{
+  "disabledSystemSkills": []
+}
+```
+
+Vault skill structure:
+
+```txt
+data/<vault>/skills/<skill-name>/SKILL.md
+```
+
+Assistant resolution details: [docs/reference/assistant.md](docs/reference/assistant.md).
 
 Example `assistant.md`:
 
@@ -442,8 +466,7 @@ System Log records events such as:
 - resource creation;
 - mention creation;
 - automation runs;
-- git pull/push;
-- role changes.
+- git pull/push.
 
 Mentions use Markdown links:
 

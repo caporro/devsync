@@ -29,6 +29,13 @@ await fs.mkdir(webDist, { recursive: true })
 await fs.writeFile(path.join(webDist, "index.html"), "<!doctype html><html></html>\n", "utf8")
 
 const { app } = await import("./index.js")
+const { hashThreadUserKey } = await import("./agent-store.js")
+const {
+  appendAgentRunEvent,
+  canSubscribeToAgentRunStream,
+  createAgentRunStream,
+  subscribeToAgentRunStream,
+} = await import("./agent-run-streams.js")
 const { resolveAgentTools } = await import("./agent-tools.js")
 const { summarizeToolPayload } = await import("./ai-logging.js")
 const { ensureDataDir } = await import("./storage.js")
@@ -139,6 +146,21 @@ test("login failures are rate limited", async () => {
   assert.equal(blocked.statusCode, 429)
   assert.equal(blocked.json().error, "Too many attempts. Try again later.")
   assert.ok(Number(blocked.headers["retry-after"]) > 0)
+})
+
+test("API responses include global security headers", async () => {
+  const cookie = await login()
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/projects",
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.headers["x-content-type-options"], "nosniff")
+  assert.equal(response.headers["x-frame-options"], "DENY")
+  assert.equal(response.headers["referrer-policy"], "no-referrer")
+  assert.match(String(response.headers["content-security-policy"]), /frame-ancestors 'none'/)
 })
 
 test("project folders without metadata are listed and repaired on write", async () => {
@@ -682,6 +704,94 @@ test("resource uploads can skip automatic project log entries", async () => {
 
   assert.equal(log.statusCode, 201)
   assert.match(log.json().content, /\[notes\.txt\]\(\.\.\/resources\/notes\.txt\)/)
+})
+
+test("assistant threads are stored in runtime outside the vault", async () => {
+  const cookie = await login()
+  const userKey = hashThreadUserKey("security@example.com")
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/agent-threads",
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ title: "Runtime chat" }),
+  })
+
+  assert.equal(created.statusCode, 201)
+  const threadId = created.json().id
+  const runtimeThreadPath = path.join(tempRoot, "runtime", vaultName, "chats", userKey, `${threadId}.json`)
+  const vaultThreadPath = path.join(tempRoot, vaultName, ".assistant", "threads", userKey, `${threadId}.json`)
+
+  assert.equal(await pathExists(runtimeThreadPath), true)
+  assert.equal(await pathExists(vaultThreadPath), false)
+
+  const boundary = "----devsync-agent-attachment"
+  const payload = Buffer.from([
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="file"; filename="chat.txt"',
+    "Content-Type: text/plain",
+    "",
+    "hello",
+    `--${boundary}--`,
+    "",
+  ].join("\r\n"))
+  const upload = await app.inject({
+    method: "POST",
+    url: `/api/agent-threads/${threadId}/attachments`,
+    headers: {
+      cookie,
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+      "content-length": String(payload.length),
+    },
+    payload,
+  })
+
+  assert.equal(upload.statusCode, 201)
+  assert.equal(upload.json().path, `runtime/${vaultName}/chats/${userKey}/${threadId}/attachments/chat.txt`)
+  assert.equal(
+    await pathExists(path.join(tempRoot, upload.json().path)),
+    true
+  )
+
+  const download = await app.inject({
+    method: "GET",
+    url: `/api/agent-threads/${threadId}/attachments/${upload.json().id}`,
+    headers: { cookie },
+  })
+
+  assert.equal(download.statusCode, 200)
+  assert.equal(download.body, "hello")
+})
+
+test("assistant run streams are scoped to the thread user", () => {
+  const runId = "11111111-1111-4111-8111-111111111111"
+  const ownerKey = "aaaaaaaaaaaa"
+  const otherKey = "bbbbbbbbbbbb"
+  let leaked = false
+
+  createAgentRunStream(runId, {
+    threadId: "22222222-2222-4222-8222-222222222222",
+    userKey: ownerKey,
+  })
+  appendAgentRunEvent(runId, "token", { token: "secret-token" })
+
+  assert.equal(canSubscribeToAgentRunStream(runId, { userKey: ownerKey }), "ok")
+  assert.equal(canSubscribeToAgentRunStream(runId, { userKey: otherKey }), "forbidden")
+
+  const rejected = subscribeToAgentRunStream(runId, { userKey: otherKey }, () => {
+    leaked = true
+  })
+
+  assert.equal(rejected.unauthorized, true)
+  assert.equal(leaked, false)
+
+  const received = []
+  const accepted = subscribeToAgentRunStream(runId, { userKey: ownerKey }, (event) => {
+    received.push(event)
+  })
+
+  accepted.unsubscribe()
+  assert.deepEqual(received, [{ event: "token", data: { token: "secret-token" } }])
 })
 
 test("custom agent write tools require declared write scope", async () => {

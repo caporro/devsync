@@ -92,16 +92,6 @@ export type AssistantConfig = {
   }
 }
 
-export type AssistantRole = {
-  slug: string
-  name: string
-  description: string
-  content: string
-  scope: "vault" | "project"
-  projectId: string | null
-  overridesVault: boolean
-}
-
 export type AutomationDefinition = {
   id: string
   key: string
@@ -121,6 +111,11 @@ export type AgentThread = {
   title: string | null
   agentId: string
   projectId: string | null
+  skills: {
+    name: string
+    description: string
+    source: "system" | "vault"
+  }[]
   createdAt: string
   updatedAt: string
 }
@@ -287,69 +282,6 @@ export async function getAssistantConfig(projectId?: string | null) {
   )
 }
 
-export async function listAssistantRoles(projectId?: string | null) {
-  const search = new URLSearchParams()
-  if (projectId) {
-    search.set("projectId", projectId)
-  }
-
-  return jsonRequest<{ items: AssistantRole[] }>(
-    `/api/assistant/roles${search.size ? `?${search.toString()}` : ""}`
-  )
-}
-
-export async function readAssistantRole(scope: AssistantRole["scope"], slug: string, projectId?: string | null) {
-  const search = new URLSearchParams()
-  if (projectId) {
-    search.set("projectId", projectId)
-  }
-
-  return jsonRequest<AssistantRole>(
-    `/api/assistant/roles/${encodeURIComponent(scope)}/${encodeURIComponent(slug)}${search.size ? `?${search.toString()}` : ""}`
-  )
-}
-
-export async function createAssistantRole(body: {
-  scope: AssistantRole["scope"]
-  projectId?: string | null
-  slug?: string
-  name?: string
-  description?: string
-  content?: string
-}) {
-  return jsonRequest<AssistantRole>("/api/assistant/roles", {
-    method: "POST",
-    body: JSON.stringify(body),
-  })
-}
-
-export async function updateAssistantRole(scope: AssistantRole["scope"], slug: string, body: {
-  projectId?: string | null
-  name?: string
-  description?: string
-  content?: string
-}) {
-  return jsonRequest<AssistantRole>(
-    `/api/assistant/roles/${encodeURIComponent(scope)}/${encodeURIComponent(slug)}`,
-    {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }
-  )
-}
-
-export async function deleteAssistantRole(scope: AssistantRole["scope"], slug: string, projectId?: string | null) {
-  const search = new URLSearchParams()
-  if (projectId) {
-    search.set("projectId", projectId)
-  }
-
-  await jsonRequest<void>(
-    `/api/assistant/roles/${encodeURIComponent(scope)}/${encodeURIComponent(slug)}${search.size ? `?${search.toString()}` : ""}`,
-    { method: "DELETE" }
-  )
-}
-
 export async function listAutomations(projectId?: string | null) {
   const search = new URLSearchParams()
   if (projectId) {
@@ -417,7 +349,6 @@ export function agentAttachmentUrl(threadId: string, attachmentId: string) {
 export async function sendAgentMessage(
   threadId: string,
   content: string,
-  selectedRole?: string | null,
   attachmentIds: string[] = [],
   title?: string | null
 ) {
@@ -427,7 +358,7 @@ export async function sendAgentMessage(
     streamUrl: string
   }>(`/api/agent-threads/${threadId}/messages`, {
     method: "POST",
-    body: JSON.stringify({ attachmentIds, content, selectedRole: selectedRole || null, title: title || null }),
+    body: JSON.stringify({ attachmentIds, content, title: title || null }),
   })
 }
 

@@ -3,10 +3,8 @@ import path from "node:path"
 
 import { dataDir, vaultDir } from "./storage.js"
 import { hasFrontmatterKey, normalizeList, parseFrontmatter, readIfExists } from "./markdown-definitions.js"
-import { appendSystemLogEvent } from "./system-log.js"
 
 const ASSISTANT_FILE = "assistant.md"
-const ROLES_DIR = "roles"
 const LEGACY_VAULT_SYSTEM_FILE = "system.md"
 const LEGACY_PROJECT_CONTEXT_FILE = "agents.md"
 const LEGACY_AGENTS_DIR = "agents"
@@ -14,11 +12,42 @@ const LEGACY_AGENTS_DIR = "agents"
 export const ASSISTANT_ID = "assistant"
 
 export const BASE_ASSISTANT_PROMPT = [
-  "You are the main Devsync Assistant.",
-  "Devsync is filesystem-first project memory for team documentation, resources, work and activity logs.",
-  "There is only one Assistant. Roles are temporary prompt specializations, not separate agents.",
-  "Keep answers practical, concise and grounded in the available project files.",
-  "Do not modify files unless the user clearly asks for that action.",
+  "You are Devsync Assistant, an interactive operational assistant running inside a Devsync installation for a team.",
+  "Use the available tools to help the team manage context, resources, tasks, activity logs, produced work, and automations.",
+  "Devsync is filesystem-first: data must stay readable, inspectable, and versionable in the vault.",
+  "The mounted filesystem root is your working area. Treat all paths as relative to it unless the system explicitly says otherwise.",
+  "Do not read, write, infer access to, or mention data outside the mounted root unless a tool explicitly exposes it and the user clearly asks for it.",
+  "",
+  "Working area structure:",
+  "- project.json: metadata only.",
+  "- README.md: main notes and stable context.",
+  "- assistant.md: Assistant instructions for this working area.",
+  "- resources/: source material, uploads, links, notes, images, PDFs, and raw inputs.",
+  "- logs/activity/: append-only activity timeline for users, Assistant, automations, and system-originated updates.",
+  "- tasks/: operational tasks, follow-ups, decisions to complete, and task index.",
+  "- work/: outputs produced or refined by users, Assistant, or automations.",
+  "- automations/: automation definitions for this working area.",
+  "",
+  "Use each folder according to its purpose:",
+  "- Put raw or source material in resources/.",
+  "- Put generated or refined deliverables in work/.",
+  "- Put operational next steps in tasks/.",
+  "- Append short readable updates to logs/activity/ when an activity log tool or workflow is available.",
+  "- If an activity entry would be long, save it as Markdown in resources/ or work/ and keep only a short linked entry in the log.",
+  "",
+  "Operating rules:",
+  "- Prefer the simplest solution that works.",
+  "- Read relevant files before changing them.",
+  "- Use available Devsync tools instead of inventing actions.",
+  "- Never write outside the allowed working area.",
+  "- Never delete or overwrite data without explicit confirmation.",
+  "- Preserve filesystem-readable data: Markdown for narrative content, small JSON for metadata.",
+  "- Keep outputs concise, practical, and action-oriented.",
+  "- If the user asks for a concrete change, do it end-to-end unless blocked.",
+  "- Ask only one focused question when no safe default exists.",
+  "- Do not claim an action succeeded unless the tool result confirms it.",
+  "",
+  "Skills are reusable task instructions loaded with tools, not separate agents.",
 ].join("\n")
 
 function assertProjectId(projectId) {
@@ -27,73 +56,9 @@ function assertProjectId(projectId) {
   }
 }
 
-function assertRoleSlug(slug) {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
-    throw Object.assign(new Error("Invalid role slug"), { statusCode: 400 })
-  }
-}
-
-function slugify(input) {
-  const slug = String(input ?? "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-
-  return slug || "role"
-}
-
 function projectRoot(projectId) {
   assertProjectId(projectId)
   return path.join(dataDir, projectId)
-}
-
-function scopeRoot(scope, projectId) {
-  if (scope === "vault") {
-    return vaultDir
-  }
-
-  if (scope === "project") {
-    if (!projectId) {
-      throw Object.assign(new Error("Project id is required"), { statusCode: 400 })
-    }
-    return projectRoot(projectId)
-  }
-
-  throw Object.assign(new Error("Invalid role scope"), { statusCode: 400 })
-}
-
-function rolePath(scope, slug, projectId) {
-  assertRoleSlug(slug)
-  return path.join(scopeRoot(scope, projectId), ROLES_DIR, `${slug}.md`)
-}
-
-function humanizeSlug(slug) {
-  return String(slug)
-    .split("-")
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ")
-}
-
-function compactFrontmatterString(value) {
-  return String(value ?? "").replace(/\r?\n/g, " ").trim()
-}
-
-function serializeRole(input) {
-  const name = compactFrontmatterString(input.name)
-  const description = compactFrontmatterString(input.description)
-  const content = String(input.content ?? "").trim()
-
-  return [
-    "---",
-    `name: ${JSON.stringify(name)}`,
-    `description: ${JSON.stringify(description)}`,
-    "---",
-    content,
-    "",
-  ].join("\n")
 }
 
 function uniqueList(...groups) {
@@ -161,24 +126,9 @@ function normalizeAssistantConfig() {
     title: "Assistant",
     description: "Main Devsync chat assistant.",
     model: String(model).trim(),
-    tools: ["filesystem"],
+    tools: ["filesystem", "use_skill"],
     read: ["**/*"],
     write: ["tasks/**", "resources/**", "work/**", "automations/**"],
-  }
-}
-
-function normalizeRole(raw, filePath, scope, projectId, overridesVault = false) {
-  const { data, body } = parseFrontmatter(raw)
-  const slug = path.basename(filePath, ".md")
-
-  return {
-    slug,
-    name: String(data.name ?? humanizeSlug(slug)).trim(),
-    description: String(data.description ?? "").trim(),
-    content: body,
-    scope,
-    projectId: scope === "project" ? projectId : null,
-    overridesVault,
   }
 }
 
@@ -287,32 +237,6 @@ async function readProjectAssistantDefinition(projectId, fallbackModel) {
     ?? await readFirstLegacyAgentDefinition(root, { scope: "project", projectId }, fallbackModel)
 }
 
-async function discoverRoles(scope, projectId = null) {
-  const rolesRoot = path.join(scopeRoot(scope, projectId), ROLES_DIR)
-  let entries = []
-
-  try {
-    entries = await fs.readdir(rolesRoot, { withFileTypes: true })
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return []
-    }
-    throw error
-  }
-
-  const roles = []
-  const files = entries
-    .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === ".md")
-    .sort((left, right) => left.name.localeCompare(right.name))
-
-  for (const entry of files) {
-    const filePath = path.join(rolesRoot, entry.name)
-    roles.push(normalizeRole(await fs.readFile(filePath, "utf8"), filePath, scope, projectId))
-  }
-
-  return roles.sort((left, right) => left.name.localeCompare(right.name))
-}
-
 export function assistantScopeRoot(projectId) {
   if (!projectId) {
     return vaultDir
@@ -357,155 +281,7 @@ export async function getAssistantConfig(projectId = null) {
   }
 }
 
-export async function listAssistantRoles(options = {}) {
-  const projectId = options.projectId ?? null
-  if (projectId) {
-    assertProjectId(projectId)
-  }
-
-  const vaultRoles = await discoverRoles("vault")
-
-  if (!projectId) {
-    return vaultRoles
-  }
-
-  const projectRoles = await discoverRoles("project", projectId)
-  const projectSlugs = new Set(projectRoles.map((role) => role.slug))
-  const vaultSlugs = new Set(vaultRoles.map((role) => role.slug))
-
-  return [
-    ...vaultRoles.filter((role) => !projectSlugs.has(role.slug)),
-    ...projectRoles.map((role) => ({
-      ...role,
-      overridesVault: vaultSlugs.has(role.slug),
-    })),
-  ]
-}
-
-export async function readAssistantRole(scope, slug, projectId = null) {
-  const filePath = rolePath(scope, slug, projectId)
-  const raw = await readIfExists(filePath)
-
-  if (!raw) {
-    return null
-  }
-
-  const overridesVault = scope === "project"
-    ? Boolean(await readIfExists(rolePath("vault", slug)))
-    : false
-
-  return normalizeRole(raw, filePath, scope, projectId, overridesVault)
-}
-
-export async function createAssistantRole(input) {
-  const scope = input.scope
-  const projectId = input.projectId ?? null
-  const slug = slugify(input.slug ?? input.name)
-  const filePath = rolePath(scope, slug, projectId)
-
-  try {
-    await fs.access(filePath)
-    throw Object.assign(new Error("Role already exists"), { statusCode: 409 })
-  } catch (error) {
-    if (error.statusCode === 409) {
-      throw error
-    }
-    if (error.code !== "ENOENT") {
-      throw error
-    }
-  }
-
-  await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(
-    filePath,
-    serializeRole({
-      name: input.name ?? humanizeSlug(slug),
-      description: input.description ?? "",
-      content: input.content ?? "",
-    }),
-    "utf8"
-  )
-  await appendSystemLogEvent({
-    action: "assistant_role.created",
-    source: "assistant-config",
-    actor: input.author ?? input.creator ?? "team",
-    projectId,
-    target: `${scope}/roles/${slug}.md`,
-    summary: `Created assistant role ${slug}`,
-  })
-
-  return readAssistantRole(scope, slug, projectId)
-}
-
-export async function updateAssistantRole(scope, slug, input) {
-  const projectId = input.projectId ?? null
-  const current = await readAssistantRole(scope, slug, projectId)
-
-  if (!current) {
-    return null
-  }
-
-  await fs.writeFile(
-    rolePath(scope, slug, projectId),
-    serializeRole({
-      name: input.name === undefined ? current.name : input.name,
-      description: input.description === undefined ? current.description : input.description,
-      content: input.content === undefined ? current.content : input.content,
-    }),
-    "utf8"
-  )
-  await appendSystemLogEvent({
-    action: "assistant_role.updated",
-    source: "assistant-config",
-    actor: input.author ?? input.editor ?? "team",
-    projectId,
-    target: `${scope}/roles/${slug}.md`,
-    summary: `Updated assistant role ${slug}`,
-  })
-
-  return readAssistantRole(scope, slug, projectId)
-}
-
-export async function deleteAssistantRole(scope, slug, projectId = null) {
-  try {
-    await fs.unlink(rolePath(scope, slug, projectId))
-    await appendSystemLogEvent({
-      action: "assistant_role.deleted",
-      source: "assistant-config",
-      actor: "team",
-      projectId,
-      target: `${scope}/roles/${slug}.md`,
-      summary: `Deleted assistant role ${slug}`,
-    })
-    return true
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return false
-    }
-    throw error
-  }
-}
-
-export async function resolveAssistantRole(slug, options = {}) {
-  const requested = String(slug ?? "").trim()
-
-  if (!requested) {
-    return null
-  }
-
-  assertRoleSlug(requested)
-
-  if (options.projectId) {
-    const projectRole = await readAssistantRole("project", requested, options.projectId)
-    if (projectRole) {
-      return projectRole
-    }
-  }
-
-  return readAssistantRole("vault", requested)
-}
-
-export async function loadAssistantInstructionContext(projectId, selectedRole = null) {
+export async function loadAssistantInstructionContext(projectId) {
   const parts = []
   const base = normalizeAssistantConfig()
   const vaultAssistant = await readVaultAssistantDefinition(base.model)
@@ -519,16 +295,6 @@ export async function loadAssistantInstructionContext(projectId, selectedRole = 
 
   if (projectPrompt) {
     parts.push(projectPrompt)
-  }
-
-  if (selectedRole) {
-    const role = await resolveAssistantRole(selectedRole, { projectId })
-
-    if (!role) {
-      throw Object.assign(new Error(`Unknown role: ${selectedRole}`), { statusCode: 400 })
-    }
-
-    parts.push(tagPrompt("selected_role", role.content))
   }
 
   return parts.join("\n\n")
@@ -547,17 +313,5 @@ export function formatAssistantForApi(assistant) {
     projectId: assistant.projectId ?? null,
     overrides: assistant.overrides,
     sources: assistant.sources,
-  }
-}
-
-export function formatRoleForApi(role) {
-  return {
-    slug: role.slug,
-    name: role.name,
-    description: role.description,
-    content: role.content,
-    scope: role.scope,
-    projectId: role.projectId ?? null,
-    overridesVault: Boolean(role.overridesVault),
   }
 }

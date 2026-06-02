@@ -13,7 +13,7 @@ const RESOURCES_DIR = "resources"
 const WORK_DIR = "work"
 const LEGACY_RESOURCES_DIR = "artifacts"
 const LEGACY_WORK_DIR = "generated"
-const PROJECT_DIRS = [RESOURCES_DIR, "logs", WORK_DIR, "tasks", "roles", "automations"]
+const PROJECT_DIRS = [RESOURCES_DIR, "logs", WORK_DIR, "tasks", "automations"]
 const LEGACY_ACTIVITY_LOG_FILE = "activity.md"
 const ACTIVITY_LOG_DIR = "activity"
 const TASKS_README_FILE = "README.md"
@@ -1472,8 +1472,13 @@ export async function ensureDataDir() {
   await ensureSafeDir(vaultDir)
   await ensureSafeDir(dataDir)
   await ensureSafeDir(docsDir)
-  await ensureSafeDir(path.join(vaultDir, "roles"))
+  await ensureSafeDir(path.join(vaultDir, "config"))
+  await ensureSafeDir(path.join(vaultDir, "skills"))
   await ensureSafeDir(path.join(vaultDir, "automations"))
+  const skillsConfigPath = path.join(vaultDir, "config", "skills.json")
+  if (!existsSync(skillsConfigPath)) {
+    await fs.writeFile(skillsConfigPath, `${JSON.stringify({ disabledSystemSkills: [] }, null, 2)}\n`, "utf8")
+  }
 
   const entries = await fs.readdir(dataDir, { withFileTypes: true })
   await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
