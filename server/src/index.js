@@ -701,6 +701,7 @@ app.post("/api/projects/:projectId/resources/upload", async (request, reply) => 
     const resource = await saveUpload(request.params.projectId, file, {
       author: file?.fields?.author?.value,
       folder: file?.fields?.folder?.value,
+      logActivity: file?.fields?.logActivity?.value !== "false",
     })
     reply.code(201).send(resource)
     const resourceKind = path.extname(resource.name).toLowerCase() === ".md" ? "markdown" : "file"

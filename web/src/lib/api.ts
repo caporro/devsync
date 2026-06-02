@@ -557,13 +557,22 @@ export async function addExcalidrawArtifact(projectId: string, body: { title?: s
   )
 }
 
-export async function uploadArtifact(projectId: string, file: File, author?: string, folder?: string) {
+export async function uploadArtifact(
+  projectId: string,
+  file: File,
+  author?: string,
+  folder?: string,
+  options: { logActivity?: boolean } = {}
+) {
   const formData = new FormData()
   if (author) {
     formData.set("author", author)
   }
   if (folder) {
     formData.set("folder", folder)
+  }
+  if (options.logActivity === false) {
+    formData.set("logActivity", "false")
   }
   formData.set("file", file)
 

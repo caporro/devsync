@@ -629,6 +629,61 @@ test("uploaded SVG is stored but still downloaded as attachment", async () => {
   assert.equal(download.headers["x-content-type-options"], "nosniff")
 })
 
+test("resource uploads can skip automatic project log entries", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-upload-silent-log")
+  const boundary = "----devsync-security-silent-upload"
+  const payload = Buffer.from([
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="logActivity"',
+    "",
+    "false",
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="file"; filename="notes.txt"',
+    "Content-Type: text/plain",
+    "",
+    "hello",
+    `--${boundary}--`,
+    "",
+  ].join("\r\n"))
+
+  const upload = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/resources/upload`,
+    headers: {
+      cookie,
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+      "content-length": String(payload.length),
+    },
+    payload,
+  })
+
+  assert.equal(upload.statusCode, 201)
+  assert.equal(upload.json().path, "resources/notes.txt")
+  assert.equal(await pathExists(path.join(projectDir(projectId), "resources/notes.txt")), true)
+
+  const projectBeforeLog = await app.inject({
+    method: "GET",
+    url: `/api/projects/${projectId}`,
+    headers: { cookie },
+  })
+
+  assert.equal(projectBeforeLog.statusCode, 200)
+  assert.equal(projectBeforeLog.json().activity.entries.length, 0)
+
+  const log = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/logs`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({
+      content: `Attached notes\n\n[notes.txt](../${upload.json().path})`,
+    }),
+  })
+
+  assert.equal(log.statusCode, 201)
+  assert.match(log.json().content, /\[notes\.txt\]\(\.\.\/resources\/notes\.txt\)/)
+})
+
 test("custom agent write tools require declared write scope", async () => {
   const cookie = await login()
   const projectId = await createProject(cookie, "security-agent-tools")

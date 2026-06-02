@@ -2276,13 +2276,15 @@ export async function saveUpload(projectId, filePart, input = {}) {
   const target = await uniquePath(dir, cleanFileName(filePart.filename))
   await safeUploadStream(target, filePart.file)
   const relativePath = projectRelative(projectId, target)
-  await appendActivityEntry(projectId, {
-    author: input.author ?? "team",
-    kind: "artifact",
-    artifactPath: relativePath,
-    title: `Uploaded ${path.basename(target)}`,
-    content: `Uploaded resource [${path.basename(target)}](../${relativePath}).`,
-  })
+  if (input.logActivity !== false) {
+    await appendActivityEntry(projectId, {
+      author: input.author ?? "team",
+      kind: "artifact",
+      artifactPath: relativePath,
+      title: `Uploaded ${path.basename(target)}`,
+      content: `Uploaded resource [${path.basename(target)}](../${relativePath}).`,
+    })
+  }
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.uploaded",

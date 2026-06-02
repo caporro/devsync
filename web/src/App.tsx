@@ -702,6 +702,13 @@ type MoveEntryState = {
   root: "resources" | "work"
 }
 
+type PendingLogFile = {
+  file: File
+  id: string
+  name: string
+  size: number
+}
+
 function movePathParts(pathValue: string) {
   const parts = pathValue.split("/").filter(Boolean)
   const root = parts[0] === "work" ? "work" : "resources"
@@ -4179,6 +4186,7 @@ function WorkspaceApp({
   const assistantScrollFrameRef = useRef<number | null>(null)
   const agentEventSourceRef = useRef<EventSource | null>(null)
   const logTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const logFileInputRef = useRef<HTMLInputElement | null>(null)
   const drawingActionsRef = useRef<ExcalidrawArtifactActions | null>(null)
   const markdownActionsRef = useRef<MarkdownArtifactEditorActions | null>(null)
   const planningActionsRef = useRef<PlanningActions | null>(null)
@@ -4196,6 +4204,7 @@ function WorkspaceApp({
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null)
   const [logContent, setLogContent] = useState("")
+  const [logPendingFiles, setLogPendingFiles] = useState<PendingLogFile[]>([])
   const [logFileMenu, setLogFileMenu] = useState({
     activeIndex: 0,
     open: false,
@@ -5309,17 +5318,36 @@ function WorkspaceApp({
   async function handleLogSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (!selectedProjectId || !logContent.trim()) {
+    if (!selectedProjectId || (!logContent.trim() && logPendingFiles.length === 0)) {
       return
     }
 
     await run("log", async () => {
+      const uploaded: { name: string; path: string }[] = []
+      for (const item of logPendingFiles) {
+        uploaded.push(await uploadArtifact(
+          selectedProjectId,
+          item.file,
+          currentAuthor,
+          selectedResourceFolder,
+          { logActivity: false }
+        ))
+      }
+
+      const attachmentLinks = uploaded.map((file) => `[${file.name}](../${file.path})`)
+      const content = [
+        logContent.trim(),
+        attachmentLinks.length ? attachmentLinks.join("\n") : "",
+      ].filter(Boolean).join("\n\n")
+
       await addLog(selectedProjectId, {
         author: currentAuthor,
-        content: logContent,
+        content,
       })
       setLogContent("")
+      setLogPendingFiles([])
       setSelectedArtifactPath(null)
+      setSelectedGeneratedPath(null)
       setSelectedTaskPath(null)
       setMainView("activity")
       await refresh(selectedProjectId)
@@ -5390,13 +5418,6 @@ function WorkspaceApp({
       queryClient.setQueryData(["planning-gantt"], saved)
       await queryClient.invalidateQueries({ queryKey: ["system-log"] })
     })
-  }
-
-  function handleLogKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault()
-      event.currentTarget.form?.requestSubmit()
-    }
   }
 
   async function handleLoadOlderActivity() {
@@ -5683,6 +5704,17 @@ function WorkspaceApp({
   const resourceFolders = projectQuery.data?.folders?.resources ?? []
   const workFolders = projectQuery.data?.folders?.work ?? []
   const tasks = projectQuery.data?.files.tasks ?? EMPTY_FILES
+  const logPendingAttachments = useMemo<AgentAttachment[]>(() =>
+    logPendingFiles.map((item) => ({
+      createdAt: "",
+      id: item.id,
+      mimeType: item.file.type,
+      name: item.name,
+      path: "",
+      size: item.size,
+    })),
+    [logPendingFiles]
+  )
   const markdownCommandFiles = useMemo(() => {
     const seen = new Set<string>()
 
@@ -5729,6 +5761,7 @@ function WorkspaceApp({
 
       nextElement.focus()
       nextElement.setSelectionRange(nextCursor, nextCursor)
+      resizeAssistantComposer(nextElement)
     })
   }, [closeLogFileMenu, logContent])
   const filteredLogFileItems = useMemo(() => {
@@ -5770,6 +5803,22 @@ function WorkspaceApp({
     syncLogFileMenu(event.target)
   }
 
+  function handleLogAttachmentUpload(files: File[]) {
+    setLogPendingFiles((current) => [
+      ...current,
+      ...files.map((file) => ({
+        file,
+        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        size: file.size,
+      })),
+    ])
+  }
+
+  function handleLogAttachmentRemove(attachmentId: string) {
+    setLogPendingFiles((current) => current.filter((item) => item.id !== attachmentId))
+  }
+
   function handleLogContentKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (logFileMenu.open) {
       if (event.key === "Escape") {
@@ -5800,7 +5849,7 @@ function WorkspaceApp({
       }
     }
 
-    handleLogKeyDown(event)
+    handleAssistantComposerKeyDown(event)
   }
 
   function handleOpenProjectFileLink(path: string, projectId = selectedProjectId) {
@@ -7027,9 +7076,9 @@ function WorkspaceApp({
                 </div>
 
                 {isActivityLogView ? (
-                  <footer className="sticky bottom-0 z-10 shrink-0 border-t border-border/70 bg-background px-5 py-4 md:px-8">
-                    <form className="mx-auto max-w-3xl" onSubmit={handleLogSubmit}>
-                      <div className="relative rounded-lg border border-border bg-card p-3">
+                  <footer className="sticky bottom-0 z-10 shrink-0 bg-background px-5 pb-4 pt-5 md:px-8">
+                    <div className="relative mx-auto max-w-3xl rounded-[26px] border border-border bg-card px-4 py-2.5 shadow-[0_14px_24px_rgba(15,23,42,0.08)]">
+                      <form className="flex flex-col gap-2.5" onSubmit={handleLogSubmit}>
                         {logFileMenu.open ? (
                           <div className="absolute bottom-[calc(100%+8px)] left-0 z-50">
                             <CommandMenuList
@@ -7043,34 +7092,88 @@ function WorkspaceApp({
                             />
                           </div>
                         ) : null}
-                        <textarea
-                          className="max-h-40 min-h-16 w-full resize-none bg-transparent text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground"
-                          name="activity-log-content"
-                          onBlur={() => window.setTimeout(closeLogFileMenu, 0)}
-                          onChange={handleLogContentChange}
-                          onClick={(event) => {
-                            if (logFileMenu.open) syncLogFileMenu(event.currentTarget)
-                          }}
-                          onKeyDown={handleLogContentKeyDown}
-                          placeholder="project log input"
-                          ref={logTextareaRef}
-                          value={logContent}
+                        <ChatAttachments
+                          attachments={logPendingAttachments}
+                          onRemove={handleLogAttachmentRemove}
+                          threadId={null}
                         />
-                        <div className="mt-2 flex items-center justify-between gap-3">
-                          <VoiceInputButton
+                        <div className="relative">
+                          {logContent ? (
+                            <div
+                              aria-hidden="true"
+                              className="pointer-events-none absolute inset-x-0 top-0 whitespace-pre-wrap break-words text-[13px] leading-5 text-foreground"
+                            >
+                              {renderComposerDisplayText(logContent)}
+                            </div>
+                          ) : null}
+                          <textarea
+                            className={cn(
+                              "min-h-0 w-full resize-none bg-transparent text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground",
+                              logContent && "text-transparent caret-foreground"
+                            )}
                             disabled={!canWrite}
-                            targetRef={logTextareaRef}
+                            name="activity-log-content"
+                            onBlur={() => window.setTimeout(closeLogFileMenu, 0)}
+                            onChange={handleLogContentChange}
+                            onClick={(event) => {
+                              if (logFileMenu.open) syncLogFileMenu(event.currentTarget)
+                            }}
+                            onInput={(event) => resizeAssistantComposer(event.currentTarget)}
+                            onKeyDown={handleLogContentKeyDown}
+                            placeholder="project log input"
+                            ref={logTextareaRef}
+                            rows={1}
+                            style={{ height: "20px", overflowY: "hidden" }}
                             value={logContent}
-                            onAfterChange={syncLogFileMenu}
-                            onValueChange={setLogContent}
                           />
-                          <Button disabled={!canWrite || !logContent.trim()} type="submit">
-                            <HugeiconsIcon icon={ArrowUp03Icon} strokeWidth={2} />
-                            Save
-                          </Button>
                         </div>
-                      </div>
-                    </form>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <input
+                            className="hidden"
+                            multiple
+                            onChange={(event) => {
+                              const files = Array.from(event.target.files ?? [])
+                              if (files.length) {
+                                handleLogAttachmentUpload(files)
+                              }
+                              event.target.value = ""
+                            }}
+                            ref={logFileInputRef}
+                            type="file"
+                          />
+                          <button
+                            aria-label="Add"
+                            className="inline-flex size-9 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-muted"
+                            disabled={!canWrite}
+                            onClick={() => logFileInputRef.current?.click()}
+                            type="button"
+                          >
+                            <HugeiconsIcon className="size-4.5" icon={AddCircleIcon} strokeWidth={2} />
+                          </button>
+
+                          <div className="ml-auto flex items-center gap-2">
+                            <VoiceInputButton
+                              disabled={!canWrite}
+                              targetRef={logTextareaRef}
+                              value={logContent}
+                              onAfterChange={(element, nextValue) => {
+                                resizeAssistantComposer(element)
+                                syncLogFileMenu(element, nextValue)
+                              }}
+                              onValueChange={setLogContent}
+                            />
+                            <Button
+                              className="size-10 rounded-full p-0"
+                              disabled={!canWrite || (!logContent.trim() && logPendingFiles.length === 0)}
+                              type="submit"
+                            >
+                              <HugeiconsIcon className="size-4.5" icon={ArrowUp03Icon} strokeWidth={2} />
+                            </Button>
+                          </div>
+                        </div>
+                      </form>
+                    </div>
                   </footer>
                 ) : null}
               </main>
