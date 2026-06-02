@@ -18,6 +18,8 @@ import {
   FileUnknownIcon,
   FilterIcon,
   FloppyDiskIcon,
+  Folder01Icon,
+  FolderAddIcon,
   FullScreenIcon,
   GitBranchIcon,
   Key01Icon,
@@ -141,7 +143,8 @@ import {
   markMyInboxRead,
   readDocsFile,
   readFile,
-  updateArtifactIndex,
+  createProjectFolder,
+  moveProjectEntry,
   updateArtifactContent,
   updateExcalidrawArtifact,
   updateGeneratedContent,
@@ -156,13 +159,12 @@ import {
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
+import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectFolder, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
 import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AssistantRole, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
 const EMPTY_DOCS: DocsSummary[] = []
 const EMPTY_FILES: ProjectFile[] = []
-const ARTIFACT_INDEX_PATH = "resources/readme.md"
 const TASK_INDEX_PATH = "tasks/README.md"
 const CHAT_MAX_WIDTH = "max-w-[760px]"
 const CHAT_THREAD_MENU_VALUE = "threads"
@@ -624,6 +626,73 @@ function iconForFile(fileName: string) {
 
 function displayFileTitle(file: ProjectFile) {
   return file.title?.trim() || file.name
+}
+
+function fileFolder(file: ProjectFile) {
+  return file.folder ?? file.path.split("/").slice(1, -1).join("/")
+}
+
+function folderFromPath(filePath: string) {
+  return filePath.split("/").slice(1, -1).join("/")
+}
+
+function pathAfterMove(pathValue: string | null, from: string, to: string) {
+  if (!pathValue) return pathValue
+  return pathValue === from || pathValue.startsWith(`${from}/`) ? `${to}${pathValue.slice(from.length)}` : pathValue
+}
+
+function folderAfterMove(folder: string, root: "resources" | "work", from: string, to: string) {
+  const prefix = `${root}/`
+  if (!from.startsWith(prefix) || !to.startsWith(prefix)) return folder
+
+  const fromFolder = from.slice(prefix.length)
+  const toFolder = to.slice(prefix.length)
+  if (folder === fromFolder || folder.startsWith(`${fromFolder}/`)) {
+    return `${toFolder}${folder.slice(fromFolder.length)}`
+  }
+
+  return folder
+}
+
+type MoveEntryKind = "file" | "folder"
+
+type MoveEntryState = {
+  destinationFolder: string
+  from: string
+  kind: MoveEntryKind
+  name: string
+  root: "resources" | "work"
+}
+
+function movePathParts(pathValue: string) {
+  const parts = pathValue.split("/").filter(Boolean)
+  const root = parts[0] === "work" ? "work" : "resources"
+
+  return {
+    folder: parts.slice(1, -1).join("/"),
+    name: parts.at(-1) ?? "",
+    root,
+  }
+}
+
+function moveTargetPath(state: MoveEntryState) {
+  return [state.root, state.destinationFolder, state.name.trim()].filter(Boolean).join("/")
+}
+
+function directFolders(folders: ProjectFolder[], parent: string) {
+  const seen = new Set<string>()
+
+  return folders
+    .filter((folder) => folder.folder === parent)
+    .filter((folder) => {
+      if (seen.has(folder.path)) return false
+      seen.add(folder.path)
+      return true
+    })
+}
+
+function directFiles(files: ProjectFile[], parent: string) {
+  return files.filter((file) => fileFolder(file) === parent)
 }
 
 function formatSystemLogDate(value: string) {
@@ -1553,11 +1622,15 @@ function ActivityEntryView({
 function ProjectRail({
   activePath,
   activeGeneratedPath,
+  activeResourceFolder,
+  activeWorkFolder,
   activeTaskPath,
   busyAutomationId,
   automations,
   artifacts,
+  resourceFolders,
   generatedFiles,
+  workFolders,
   tasks,
   view,
   onOpenConfig,
@@ -1565,7 +1638,9 @@ function ProjectRail({
   onOpenAssistant,
   onOpenArtifacts,
   onOpenArtifact,
+  onOpenResourceFolder,
   onOpenGeneratedFile,
+  onOpenWorkFolder,
   onAddArtifact,
   onCreateDrawing,
   onAddTask,
@@ -1575,11 +1650,15 @@ function ProjectRail({
 }: {
   activePath: string | null
   activeGeneratedPath: string | null
+  activeResourceFolder: string
+  activeWorkFolder: string
   activeTaskPath: string | null
   busyAutomationId: string | null
   automations: AutomationDefinition[]
   artifacts: ProjectFile[]
+  resourceFolders: ProjectFolder[]
   generatedFiles: ProjectFile[]
+  workFolders: ProjectFolder[]
   tasks: ProjectFile[]
   view: MainView
   onOpenConfig: () => void
@@ -1587,7 +1666,9 @@ function ProjectRail({
   onOpenAssistant: () => void
   onOpenArtifacts: () => void
   onOpenArtifact: (path: string) => void
+  onOpenResourceFolder: (folder: string) => void
   onOpenGeneratedFile: (path: string) => void
+  onOpenWorkFolder: (folder: string) => void
   onAddArtifact: () => void
   onCreateDrawing: () => void
   onAddTask: () => void
@@ -1595,6 +1676,11 @@ function ProjectRail({
   onOpenTasks: () => void
   onOpenTask: (path: string) => void
 }) {
+  const rootResourceFolders = directFolders(resourceFolders, "")
+  const rootWorkFolders = directFolders(workFolders, "")
+  const rootResources = directFiles(artifacts, "")
+  const rootWorkFiles = directFiles(generatedFiles, "")
+
   return (
     <aside className="hidden w-[260px] shrink-0 overflow-y-auto border-l border-border/70 bg-background px-4 py-5 lg:block">
       <section className="space-y-1">
@@ -1661,12 +1747,36 @@ function ProjectRail({
       </section>
 
       <section className="mt-6 space-y-2">
-        <div className="px-2 text-sm font-semibold text-muted-foreground">Work</div>
+        <button
+          className={cn(
+            "rounded-md px-2 py-1 text-left text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground",
+            view === "placeholder" && activeWorkFolder === "" && "bg-muted text-foreground"
+          )}
+          onClick={() => onOpenWorkFolder("")}
+          type="button"
+        >
+          Work
+        </button>
         <div className="space-y-1">
-          {generatedFiles.length === 0 ? (
+          {rootWorkFolders.length === 0 && rootWorkFiles.length === 0 ? (
             <div className="px-2 py-1 text-xs text-muted-foreground">Empty</div>
           ) : (
-            generatedFiles.map((file) => (
+            <>
+            {rootWorkFolders.map((folder) => (
+              <button
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
+                  view === "placeholder" && activeWorkFolder === folder.path.slice("work/".length) && "bg-muted text-foreground"
+                )}
+                key={folder.path}
+                onClick={() => onOpenWorkFolder(folder.path.slice("work/".length))}
+                type="button"
+              >
+                <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={Folder01Icon} strokeWidth={2} />
+                <span className="min-w-0 truncate">{folder.name}</span>
+              </button>
+            ))}
+            {rootWorkFiles.map((file) => (
               <button
                 className={cn(
                   "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
@@ -1683,7 +1793,8 @@ function ProjectRail({
                 />
                 <span className="min-w-0 truncate">{displayFileTitle(file)}</span>
               </button>
-            ))
+            ))}
+            </>
           )}
         </div>
       </section>
@@ -1720,10 +1831,25 @@ function ProjectRail({
           </div>
         </div>
         <div className="space-y-1">
-          {artifacts.length === 0 ? (
+          {rootResourceFolders.length === 0 && rootResources.length === 0 ? (
             <div className="px-2 py-1 text-xs text-muted-foreground">Empty</div>
           ) : (
-            artifacts.map((file) => (
+            <>
+            {rootResourceFolders.map((folder) => (
+              <button
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
+                  view === "artifacts" && activeResourceFolder === folder.path.slice("resources/".length) && "bg-muted text-foreground"
+                )}
+                key={folder.path}
+                onClick={() => onOpenResourceFolder(folder.path.slice("resources/".length))}
+                type="button"
+              >
+                <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={Folder01Icon} strokeWidth={2} />
+                <span className="min-w-0 truncate">{folder.name}</span>
+              </button>
+            ))}
+            {rootResources.map((file) => (
               <button
                 className={cn(
                   "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
@@ -1740,7 +1866,8 @@ function ProjectRail({
                 />
                 <span className="min-w-0 truncate">{displayFileTitle(file)}</span>
               </button>
-            ))
+            ))}
+            </>
           )}
         </div>
       </section>
@@ -2736,6 +2863,248 @@ function NewsView({
   )
 }
 
+function FileBrowserView({
+  addLabel,
+  emptyLabel = "Empty",
+  files,
+  folders,
+  folder,
+  isBusy,
+  isLoading,
+  title,
+  onAdd,
+  onCreateDrawing,
+  onCreateFolder,
+  onMoveFile,
+  onMoveFolder,
+  onOpenFile,
+  onOpenFolder,
+}: {
+  addLabel?: string
+  emptyLabel?: string
+  files: ProjectFile[]
+  folders: ProjectFolder[]
+  folder: string
+  isBusy: boolean
+  isLoading: boolean
+  title: string
+  onAdd?: () => void
+  onCreateDrawing?: () => void
+  onCreateFolder: () => void
+  onMoveFile?: (path: string) => void
+  onMoveFolder?: (path: string) => void
+  onOpenFile: (path: string) => void
+  onOpenFolder: (folder: string) => void
+}) {
+  const visibleFolders = useMemo(() => directFolders(folders, folder), [folder, folders])
+  const visibleFiles = useMemo(() => directFiles(files, folder), [files, folder])
+  const breadcrumbs = folder ? folder.split("/").filter(Boolean) : []
+
+  return (
+    <section className="mx-auto max-w-3xl">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-foreground">{title}</h1>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
+            <button className="rounded px-1 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => onOpenFolder("")} type="button">
+              {title.toLowerCase()}
+            </button>
+            {breadcrumbs.map((part, index) => {
+              const nextFolder = breadcrumbs.slice(0, index + 1).join("/")
+              return (
+                <span className="inline-flex items-center gap-1" key={nextFolder}>
+                  <span>/</span>
+                  <button className="rounded px-1 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => onOpenFolder(nextFolder)} type="button">
+                    {part}
+                  </button>
+                </span>
+              )
+            })}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {onCreateDrawing ? (
+            <Button disabled={isBusy} onClick={onCreateDrawing} type="button" variant="outline">
+              <HugeiconsIcon icon={DrawingModeIcon} strokeWidth={2} />
+              New drawing
+            </Button>
+          ) : null}
+          <Button disabled={isBusy} onClick={onCreateFolder} type="button" variant="outline">
+            <HugeiconsIcon icon={FolderAddIcon} strokeWidth={2} />
+            New folder
+          </Button>
+          {onAdd ? (
+            <Button disabled={isBusy} onClick={onAdd} type="button" variant="outline">
+              <HugeiconsIcon icon={AddCircleIcon} strokeWidth={2} />
+              {addLabel ?? "Add"}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="text-sm text-muted-foreground">Loading...</div>
+      ) : visibleFolders.length === 0 && visibleFiles.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+          {emptyLabel}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          {visibleFolders.map((item) => {
+            const folderPath = item.path.split("/").slice(1).join("/")
+
+            return (
+              <div
+                className="flex w-full min-w-0 items-center gap-2 border-b border-border/70 px-3 py-2 text-sm last:border-b-0 hover:bg-muted"
+                key={item.path}
+              >
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                  onClick={() => onOpenFolder(folderPath)}
+                  type="button"
+                >
+                  <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={Folder01Icon} strokeWidth={2} />
+                  <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
+                </button>
+                {onMoveFolder ? (
+                  <Button disabled={isBusy} onClick={() => onMoveFolder(item.path)} size="xs" type="button" variant="ghost">
+                    Move
+                  </Button>
+                ) : null}
+              </div>
+            )
+          })}
+          {visibleFiles.map((file) => (
+            <div
+              className="flex w-full min-w-0 items-center gap-2 border-b border-border/70 px-3 py-2 text-sm last:border-b-0 hover:bg-muted"
+              key={file.path}
+            >
+              <button
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                onClick={() => onOpenFile(file.path)}
+                type="button"
+              >
+                <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={iconForFile(file.name)} strokeWidth={2} />
+                <span className="min-w-0 flex-1 truncate font-medium">{displayFileTitle(file)}</span>
+              </button>
+              <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{formatSize(file.size)}</span>
+              {onMoveFile ? (
+                <Button disabled={isBusy} onClick={() => onMoveFile(file.path)} size="xs" type="button" variant="ghost">
+                  Move
+                </Button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function MoveEntryDialog({
+  busy,
+  folders,
+  state,
+  onClose,
+  onDestinationFolderChange,
+  onNameChange,
+  onSubmit,
+}: {
+  busy: boolean
+  folders: ProjectFolder[]
+  state: MoveEntryState | null
+  onClose: () => void
+  onDestinationFolderChange: (folder: string) => void
+  onNameChange: (name: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const targetPath = state ? moveTargetPath(state) : ""
+  const name = state?.name.trim() ?? ""
+  const invalidName = Boolean(name && /[\\/]/.test(name))
+  const canSubmit = Boolean(state && name && !invalidName && targetPath !== state.from && !busy)
+  const options = state
+    ? [
+        { depth: 0, disabled: false, folder: "", label: `${state.root}/`, path: state.root },
+        ...folders.map((folder) => {
+          const folderPath = folder.path.split("/").slice(1).join("/")
+          const disabled = state.kind === "folder" && (
+            folder.path === state.from || folder.path.startsWith(`${state.from}/`)
+          )
+
+          return {
+            depth: folderPath ? folderPath.split("/").length : 0,
+            disabled,
+            folder: folderPath,
+            label: folder.name,
+            path: folder.path,
+          }
+        }),
+      ]
+    : []
+
+  return (
+    <Dialog open={Boolean(state)} onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Move {state?.kind ?? "item"}</DialogTitle>
+          <DialogDescription className="break-all">{state?.from}</DialogDescription>
+        </DialogHeader>
+
+        {state ? (
+          <form className="grid gap-4" onSubmit={onSubmit}>
+            <section className="grid gap-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Destination</div>
+              <div className="max-h-64 overflow-auto rounded-md border border-border bg-card">
+                {options.map((option) => (
+                  <button
+                    className={cn(
+                      "flex w-full min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-muted",
+                      state.destinationFolder === option.folder && "bg-muted text-foreground",
+                      option.disabled && "cursor-not-allowed opacity-45 hover:bg-transparent"
+                    )}
+                    disabled={option.disabled}
+                    key={option.path}
+                    onClick={() => onDestinationFolderChange(option.folder)}
+                    style={{ paddingLeft: `${0.75 + option.depth * 1.25}rem` }}
+                    type="button"
+                  >
+                    <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={Folder01Icon} strokeWidth={2} />
+                    <span className="min-w-0 truncate">{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="grid gap-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Name</div>
+              <Input
+                autoFocus
+                name="move-name"
+                onChange={(event) => onNameChange(event.target.value)}
+                value={state.name}
+              />
+              <div className={cn("truncate text-xs", invalidName || targetPath === state.from ? "text-destructive" : "text-muted-foreground")}>
+                {invalidName ? "Invalid name" : targetPath === state.from ? "Same path" : targetPath}
+              </div>
+            </section>
+
+            <DialogFooter>
+              <Button disabled={busy} onClick={onClose} type="button" variant="outline">
+                Cancel
+              </Button>
+              <Button disabled={!canSubmit} type="submit">
+                Move
+              </Button>
+            </DialogFooter>
+          </form>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function FileIndexView({
   checkboxes = false,
   content,
@@ -3193,6 +3562,7 @@ function ArtifactView({
 function ArtifactDialog({
   busy,
   file,
+  folder,
   open,
   textContent,
   textTitle,
@@ -3204,6 +3574,7 @@ function ArtifactDialog({
 }: {
   busy: boolean
   file: File | null
+  folder: string
   open: boolean
   textContent: string
   textTitle: string
@@ -3224,6 +3595,7 @@ function ArtifactDialog({
         </DialogHeader>
 
         <form className="grid gap-5" onSubmit={onSubmit}>
+          <div className="text-xs text-muted-foreground">Folder: {folder || "root"}</div>
           <section className="grid gap-2">
             <div className="text-sm font-medium text-foreground">File</div>
             <Input name="artifact-file" onChange={onFileChange} type="file" />
@@ -3730,6 +4102,9 @@ function WorkspaceApp({
   })
   const [artifactDialogOpen, setArtifactDialogOpen] = useState(false)
   const [mcpTokensOpen, setMcpTokensOpen] = useState(false)
+  const [moveDialog, setMoveDialog] = useState<MoveEntryState | null>(null)
+  const [selectedResourceFolder, setSelectedResourceFolder] = useState("")
+  const [selectedWorkFolder, setSelectedWorkFolder] = useState("")
   const [artifactFile, setArtifactFile] = useState<File | null>(null)
   const [artifactTextTitle, setArtifactTextTitle] = useState("")
   const [artifactTextContent, setArtifactTextContent] = useState("")
@@ -4072,16 +4447,15 @@ function WorkspaceApp({
         throw new Error("Project is required")
       }
 
-      const artifact = await uploadArtifact(selectedProjectId, file, currentAuthor)
+      const artifact = await uploadArtifact(selectedProjectId, file, currentAuthor, selectedResourceFolder)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["projects"] }),
         queryClient.invalidateQueries({ queryKey: ["project", selectedProjectId] }),
-        queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] }),
       ])
 
       return "../" + artifact.path
     },
-    [currentAuthor, queryClient, selectedProjectId]
+    [currentAuthor, queryClient, selectedProjectId, selectedResourceFolder]
   )
 
   async function run(
@@ -4390,10 +4764,10 @@ function WorkspaceApp({
       await uploadArtifact(
         selectedProjectId,
         new File([blob], attachment.name, { type: attachment.mimeType || blob.type }),
-        currentAuthor
+        currentAuthor,
+        selectedResourceFolder
       )
       await refresh(selectedProjectId)
-      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] })
     }, { successMessage: "Added to resources" })
   }
 
@@ -4413,9 +4787,9 @@ function WorkspaceApp({
         title: deriveAssistantThreadTitle(content) || "Assistant response",
         content,
         author: currentAuthor,
+        folder: selectedResourceFolder,
       })
       await refresh(selectedProjectId)
-      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] })
     }, { successMessage: "Added to resources" })
   }
 
@@ -4971,7 +5345,7 @@ function WorkspaceApp({
 
     await run("artifact", async () => {
       if (artifactFile) {
-        await uploadArtifact(selectedProjectId, artifactFile, currentAuthor)
+        await uploadArtifact(selectedProjectId, artifactFile, currentAuthor, selectedResourceFolder)
       }
 
       if (artifactTextContent.trim()) {
@@ -4979,6 +5353,7 @@ function WorkspaceApp({
           title: artifactTextTitle.trim() || "Note",
           content: artifactTextContent,
           author: currentAuthor,
+          folder: selectedResourceFolder,
         })
       }
 
@@ -4989,8 +5364,91 @@ function WorkspaceApp({
       setPlaceholderTitle("")
       setMainView("artifacts")
       await refresh(selectedProjectId)
-      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] })
     })
+  }
+
+  async function handleCreateBrowserFolder(kind: "resources" | "work") {
+    if (!selectedProjectId) {
+      return
+    }
+
+    const baseFolder = kind === "resources" ? selectedResourceFolder : selectedWorkFolder
+    const input = window.prompt("Folder name")
+    const name = String(input ?? "").trim()
+
+    if (!name) {
+      return
+    }
+
+    const folder = [baseFolder, name].filter(Boolean).join("/")
+    await run(`${kind}-folder`, async () => {
+      await createProjectFolder(selectedProjectId, kind, folder)
+      if (kind === "resources") {
+        setSelectedResourceFolder(folder)
+        setMainView("artifacts")
+      } else {
+        setSelectedWorkFolder(folder)
+        setPlaceholderTitle("work")
+        setMainView("placeholder")
+      }
+      await refresh(selectedProjectId)
+    }, { successMessage: "Folder created" })
+  }
+
+  function handleRequestMoveProjectEntry(from: string, kind: MoveEntryKind) {
+    if (!selectedProjectId || !canLeaveDrawing()) {
+      return
+    }
+
+    const parts = movePathParts(from)
+    setMoveDialog({
+      destinationFolder: parts.folder,
+      from,
+      kind,
+      name: parts.name,
+      root: parts.root,
+    })
+  }
+
+  async function handleMoveDialogSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!selectedProjectId || !moveDialog) {
+      return
+    }
+
+    const to = moveTargetPath(moveDialog)
+    if (!to || to === moveDialog.from || /[\\/]/.test(moveDialog.name.trim())) {
+      return
+    }
+
+    await run("file-move", async () => {
+      const result = await moveProjectEntry(selectedProjectId, moveDialog.from, to)
+      const nextArtifactPath = pathAfterMove(selectedArtifactPath, result.from, result.to)
+      const nextGeneratedPath = pathAfterMove(selectedGeneratedPath, result.from, result.to)
+
+      if (nextArtifactPath !== selectedArtifactPath) {
+        setSelectedArtifactPath(nextArtifactPath)
+        if (nextArtifactPath) {
+          setSelectedResourceFolder(folderFromPath(nextArtifactPath))
+        }
+      }
+
+      if (nextGeneratedPath !== selectedGeneratedPath) {
+        setSelectedGeneratedPath(nextGeneratedPath)
+        if (nextGeneratedPath) {
+          setSelectedWorkFolder(folderFromPath(nextGeneratedPath))
+        }
+      }
+
+      if (result.kind === "folder") {
+        setSelectedResourceFolder((current) => folderAfterMove(current, "resources", result.from, result.to))
+        setSelectedWorkFolder((current) => folderAfterMove(current, "work", result.from, result.to))
+      }
+
+      await refresh(selectedProjectId)
+      setMoveDialog(null)
+    }, { successMessage: "Moved" })
   }
 
   function handleRequestCreateDrawing() {
@@ -5036,6 +5494,7 @@ function WorkspaceApp({
       const created = await addExcalidrawArtifact(selectedProjectId, {
         title,
         author: currentAuthor,
+        folder: selectedResourceFolder,
       })
       createdPath = created.path
       setSelectedArtifactPath(created.path)
@@ -5045,7 +5504,6 @@ function WorkspaceApp({
       setPlaceholderTitle("")
       setMainView("artifact")
       await refresh(selectedProjectId)
-      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] })
     })
 
     if (createdPath) {
@@ -5095,6 +5553,8 @@ function WorkspaceApp({
     : []
   const artifacts = projectQuery.data?.files.resources ?? EMPTY_FILES
   const generated = projectQuery.data?.files.work ?? EMPTY_FILES
+  const resourceFolders = projectQuery.data?.folders?.resources ?? []
+  const workFolders = projectQuery.data?.folders?.work ?? []
   const tasks = projectQuery.data?.files.tasks ?? EMPTY_FILES
   const markdownCommandFiles = useMemo(() => {
     const seen = new Set<string>()
@@ -5228,6 +5688,7 @@ function WorkspaceApp({
       guardedNavigation(() => {
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(normalized)
+        setSelectedResourceFolder(folderFromPath(normalized))
         setSelectedGeneratedPath(null)
         setSelectedTaskPath(null)
         setPlaceholderTitle("")
@@ -5241,6 +5702,7 @@ function WorkspaceApp({
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
         setSelectedGeneratedPath(normalized)
+        setSelectedWorkFolder(folderFromPath(normalized))
         setSelectedTaskPath(null)
         setPlaceholderTitle("")
         setMainView("generated-file")
@@ -5330,11 +5792,6 @@ function WorkspaceApp({
     queryFn: () => readFile(selectedProjectId!, TASK_INDEX_PATH),
     enabled: Boolean(selectedProjectId && mainView === "tasks"),
   })
-  const artifactIndexQuery = useQuery({
-    queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH],
-    queryFn: () => readFile(selectedProjectId!, ARTIFACT_INDEX_PATH),
-    enabled: Boolean(selectedProjectId && mainView === "artifacts"),
-  })
   const docFileQuery = useQuery({
     queryKey: ["docs-file", selectedDocId, selectedDocFilePath],
     queryFn: () => readDocsFile(selectedDocId!, selectedDocFilePath!),
@@ -5383,10 +5840,7 @@ function WorkspaceApp({
         setSelectedTaskPath(null)
         setMainView("artifacts")
       }
-      await Promise.all([
-        refresh(selectedProjectId),
-        queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] }),
-      ])
+      await refresh(selectedProjectId)
     })
   }
 
@@ -5424,7 +5878,6 @@ function WorkspaceApp({
         await Promise.all([
           refresh(selectedProjectId),
           queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, path] }),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] }),
         ])
       },
       { throwOnError: true }
@@ -5449,7 +5902,6 @@ function WorkspaceApp({
         await Promise.all([
           refresh(selectedProjectId),
           queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, path] }),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] }),
         ])
       },
       { throwOnError: true }
@@ -5503,25 +5955,6 @@ function WorkspaceApp({
     )
 
     return savedContent
-  }
-
-  async function handleSaveArtifactIndex(items: FileIndexItem[]) {
-    if (!selectedProjectId) {
-      return
-    }
-
-    await run(
-      "artifact-index",
-      async () => {
-        const saved = await updateArtifactIndex(selectedProjectId, items)
-        queryClient.setQueryData(["project-file", selectedProjectId, ARTIFACT_INDEX_PATH], saved.content)
-        await Promise.all([
-          refresh(selectedProjectId),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] }),
-        ])
-      },
-      { throwOnError: true }
-    )
   }
 
   async function handleSaveTaskIndex(items: FileIndexItem[]) {
@@ -6187,25 +6620,40 @@ function WorkspaceApp({
                       resolveUrl={resolveMarkdownAssetUrl}
                     />
                   ) : mainView === "artifacts" ? (
-                    <FileIndexView
-                      content={artifactIndexQuery.data}
+                    <FileBrowserView
+                      addLabel="Add resource"
+                      emptyLabel="No resources"
                       files={artifacts}
-                      indexPath={ARTIFACT_INDEX_PATH}
-                      isLoading={artifactIndexQuery.isLoading}
-                      isSaving={busyAction === "artifact-index"}
+                      folders={resourceFolders}
+                      folder={selectedResourceFolder}
+                      isBusy={Boolean(busyAction)}
+                      isLoading={projectQuery.isLoading}
                       title="Resources"
                       onAdd={() => guardedNavigation(() => setArtifactDialogOpen(true))}
                       onCreateDrawing={handleRequestCreateDrawing}
+                      onCreateFolder={() => void handleCreateBrowserFolder("resources")}
+                      onMoveFile={(path) => handleRequestMoveProjectEntry(path, "file")}
+                      onMoveFolder={(path) => handleRequestMoveProjectEntry(path, "folder")}
                       onOpenFile={(path) => {
                         guardedNavigation(() => {
                           setSelectedArtifactPath(path)
+                          setSelectedResourceFolder(folderFromPath(path))
                           setSelectedGeneratedPath(null)
                           setSelectedTaskPath(null)
                           setPlaceholderTitle("")
                           setMainView("artifact")
                         }, path)
                       }}
-                      onSaveItems={handleSaveArtifactIndex}
+                      onOpenFolder={(folder) => {
+                        guardedNavigation(() => {
+                          setSelectedResourceFolder(folder)
+                          setSelectedArtifactPath(null)
+                          setSelectedGeneratedPath(null)
+                          setSelectedTaskPath(null)
+                          setPlaceholderTitle("")
+                          setMainView("artifacts")
+                        })
+                      }}
                     />
                   ) : mainView === "tasks" ? (
                     <FileIndexView
@@ -6338,7 +6786,42 @@ function WorkspaceApp({
                   ) : mainView === "chat" ? (
                     <PlaceholderView title="Chat" />
                   ) : mainView === "placeholder" ? (
-                    <PlaceholderView title={placeholderTitle} />
+                    placeholderTitle === "work" ? (
+                      <FileBrowserView
+                        emptyLabel="No work files"
+                        files={generated}
+                        folders={workFolders}
+                        folder={selectedWorkFolder}
+                        isBusy={Boolean(busyAction)}
+                        isLoading={projectQuery.isLoading}
+                        title="Work"
+                        onCreateFolder={() => void handleCreateBrowserFolder("work")}
+                        onMoveFile={(path) => handleRequestMoveProjectEntry(path, "file")}
+                        onMoveFolder={(path) => handleRequestMoveProjectEntry(path, "folder")}
+                        onOpenFile={(path) => {
+                          guardedNavigation(() => {
+                            setSelectedArtifactPath(null)
+                            setSelectedGeneratedPath(path)
+                            setSelectedWorkFolder(folderFromPath(path))
+                            setSelectedTaskPath(null)
+                            setPlaceholderTitle("")
+                            setMainView("generated-file")
+                          })
+                        }}
+                        onOpenFolder={(folder) => {
+                          guardedNavigation(() => {
+                            setSelectedWorkFolder(folder)
+                            setSelectedArtifactPath(null)
+                            setSelectedGeneratedPath(null)
+                            setSelectedTaskPath(null)
+                            setPlaceholderTitle("work")
+                            setMainView("placeholder")
+                          })
+                        }}
+                      />
+                    ) : (
+                      <PlaceholderView title={placeholderTitle} />
+                    )
                   ) : selectedArtifact ? (
                     <ArtifactView
                       artifact={selectedArtifact}
@@ -6468,10 +6951,14 @@ function WorkspaceApp({
 	                <ProjectRail
 	                  activePath={selectedArtifactPath}
                     activeGeneratedPath={selectedGeneratedPath}
+                    activeResourceFolder={selectedResourceFolder}
+                    activeWorkFolder={selectedWorkFolder}
 	                  activeTaskPath={selectedTaskPath}
 	                  artifacts={artifacts}
+                    resourceFolders={resourceFolders}
                     busyAutomationId={busyAutomationId}
                     generatedFiles={generated}
+                    workFolders={workFolders}
 	                  tasks={tasks}
 	                  view={mainView}
                     automations={automations}
@@ -6501,6 +6988,7 @@ function WorkspaceApp({
 	                  }}
 	                  onOpenArtifacts={() => {
 	                    guardedNavigation(() => {
+                        setSelectedResourceFolder("")
 	                      setSelectedArtifactPath(null)
                         setSelectedGeneratedPath(null)
 	                      setSelectedTaskPath(null)
@@ -6508,9 +6996,20 @@ function WorkspaceApp({
 	                      setMainView("artifacts")
                       })
 	                  }}
+                  onOpenResourceFolder={(folder) => {
+                    guardedNavigation(() => {
+                      setSelectedResourceFolder(folder)
+                      setSelectedArtifactPath(null)
+                      setSelectedGeneratedPath(null)
+                      setSelectedTaskPath(null)
+                      setPlaceholderTitle("")
+                      setMainView("artifacts")
+                    })
+                  }}
                   onOpenArtifact={(path) => {
                     guardedNavigation(() => {
                       setSelectedArtifactPath(path)
+                      setSelectedResourceFolder(folderFromPath(path))
                       setSelectedGeneratedPath(null)
                       setSelectedTaskPath(null)
                       setPlaceholderTitle("")
@@ -6521,9 +7020,20 @@ function WorkspaceApp({
                     guardedNavigation(() => {
                       setSelectedArtifactPath(null)
                       setSelectedGeneratedPath(path)
+                      setSelectedWorkFolder(folderFromPath(path))
                       setSelectedTaskPath(null)
                       setPlaceholderTitle("")
                       setMainView("generated-file")
+                    })
+                  }}
+                  onOpenWorkFolder={(folder) => {
+                    guardedNavigation(() => {
+                      setSelectedArtifactPath(null)
+                      setSelectedGeneratedPath(null)
+                      setSelectedWorkFolder(folder)
+                      setSelectedTaskPath(null)
+                      setPlaceholderTitle("work")
+                      setMainView("placeholder")
                     })
                   }}
 	                  onOpenTasks={() => {
@@ -6553,6 +7063,7 @@ function WorkspaceApp({
         <ArtifactDialog
           busy={busyAction === "artifact"}
           file={artifactFile}
+          folder={selectedResourceFolder}
           open={artifactDialogOpen}
           textContent={artifactTextContent}
           textTitle={artifactTextTitle}
@@ -6566,6 +7077,15 @@ function WorkspaceApp({
           onSubmit={handleArtifactSubmit}
           onTextContentChange={setArtifactTextContent}
           onTextTitleChange={setArtifactTextTitle}
+        />
+        <MoveEntryDialog
+          busy={busyAction === "file-move"}
+          folders={moveDialog?.root === "work" ? workFolders : resourceFolders}
+          state={moveDialog}
+          onClose={() => setMoveDialog(null)}
+          onDestinationFolderChange={(destinationFolder) => setMoveDialog((current) => current ? { ...current, destinationFolder } : current)}
+          onNameChange={(name) => setMoveDialog((current) => current ? { ...current, name } : current)}
+          onSubmit={handleMoveDialogSubmit}
         />
         <DrawingNameDialog
           busy={busyAction === "excalidraw-create" || busyAction === "excalidraw-content"}

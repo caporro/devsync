@@ -24,7 +24,6 @@ data/<vault>/
       automations/
         daily-digest.md
       resources/
-        readme.md
         2026-05-24-note.md
         architecture.png
         sketch.excalidraw
@@ -71,7 +70,6 @@ data/<vault>/
 
 | File | Notes |
 | --- | --- |
-| `resources/readme.md` | Resource index. |
 | `tasks/README.md` | Task index. |
 | `logs/activity/*` | Activity log segments. |
 | `work/*.md` | Assistant/automation/person-produced outputs. |

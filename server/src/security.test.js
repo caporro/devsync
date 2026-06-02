@@ -199,8 +199,58 @@ test("new projects create resources and work folders", async () => {
 
   assert.equal(await pathExists(path.join(root, "resources")), true)
   assert.equal(await pathExists(path.join(root, "work")), true)
+  assert.equal(await pathExists(path.join(root, "resources", "readme.md")), false)
   assert.equal(await pathExists(path.join(root, "artifacts")), false)
   assert.equal(await pathExists(path.join(root, "generated")), false)
+})
+
+test("resources and work support nested folders", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-nested-folders")
+
+  const resourceFolder = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/resources/folders`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ folder: "clients/acme" }),
+  })
+  const workFolder = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/work/folders`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ folder: "reports" }),
+  })
+  const resourceFile = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/resources/text`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({
+      title: "Spec",
+      content: "hello",
+      folder: "clients/acme",
+    }),
+  })
+
+  assert.equal(resourceFolder.statusCode, 201)
+  assert.equal(resourceFolder.json().path, "resources/clients/acme")
+  assert.equal(workFolder.statusCode, 201)
+  assert.equal(workFolder.json().path, "work/reports")
+  assert.equal(resourceFile.statusCode, 201)
+  assert.match(resourceFile.json().path, /^resources\/clients\/acme\/.*spec\.md$/)
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/projects/${projectId}`,
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(
+    response.json().folders.resources.map((folder) => folder.path),
+    ["resources/clients", "resources/clients/acme"]
+  )
+  assert.deepEqual(response.json().folders.work.map((folder) => folder.path), ["work/reports"])
+  assert.deepEqual(response.json().files.resources.map((file) => file.folder), ["clients/acme"])
 })
 
 test("legacy artifacts and generated folders migrate to resources and work", async () => {
@@ -272,6 +322,113 @@ test("legacy folders are still read when canonical folders already exist", async
   assert.match(await fs.readFile(path.join(root, "artifacts", "legacy.md"), "utf8"), /# Updated legacy/)
 })
 
+test("project files and folders can move inside resources and work", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-move-files")
+
+  for (const folder of ["a", "b"]) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/resources/folders`,
+      headers: jsonHeaders({ cookie }),
+      payload: JSON.stringify({ folder }),
+    })
+
+    assert.equal(response.statusCode, 201)
+  }
+
+  const created = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/resources/text`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ title: "Move me", content: "hello", folder: "a" }),
+  })
+
+  assert.equal(created.statusCode, 201)
+  const sourcePath = created.json().path
+  const targetPath = sourcePath.replace("resources/a/", "resources/b/")
+  const movedFile = await app.inject({
+    method: "PATCH",
+    url: `/api/projects/${projectId}/files/move`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ from: sourcePath, to: targetPath }),
+  })
+
+  assert.equal(movedFile.statusCode, 200)
+  assert.deepEqual(movedFile.json(), { from: sourcePath, to: targetPath, moved: true, kind: "file" })
+  assert.equal(await pathExists(path.join(projectDir(projectId), sourcePath)), false)
+  assert.equal(await pathExists(path.join(projectDir(projectId), targetPath)), true)
+
+  await writeProjectFile(projectId, "work/source/report.md", "# Report\n")
+  const movedFolder = await app.inject({
+    method: "PATCH",
+    url: `/api/projects/${projectId}/files/move`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ from: "work/source", to: "work/archive" }),
+  })
+
+  assert.equal(movedFolder.statusCode, 200)
+  assert.deepEqual(movedFolder.json(), { from: "work/source", to: "work/archive", moved: true, kind: "folder" })
+  assert.equal(await pathExists(path.join(projectDir(projectId), "work/source/report.md")), false)
+  assert.equal(await pathExists(path.join(projectDir(projectId), "work/archive/report.md")), true)
+
+  const project = await app.inject({
+    method: "GET",
+    url: `/api/projects/${projectId}`,
+    headers: { cookie },
+  })
+
+  assert.equal(project.statusCode, 200)
+  assert.ok(project.json().files.resources.some((file) => file.path === targetPath))
+  assert.ok(project.json().folders.work.some((folder) => folder.path === "work/archive"))
+})
+
+test("project move route rejects unsafe moves", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-move-rejections")
+
+  await writeProjectFile(projectId, "resources/source.md", "# Source\n")
+  await writeProjectFile(projectId, "resources/existing.md", "# Existing\n")
+  await writeProjectFile(projectId, "resources/folder/child/file.md", "# Child\n")
+
+  const attempts = [
+    {
+      body: { from: "resources/source.md", to: "work/source.md" },
+      statusCode: 400,
+    },
+    {
+      body: { from: "resources/source.md", to: "resources/existing.md" },
+      statusCode: 409,
+    },
+    {
+      body: { from: "resources/folder", to: "resources/folder/child/moved" },
+      statusCode: 400,
+    },
+    {
+      body: { from: "../project.json", to: "resources/project.json" },
+      statusCode: 400,
+    },
+    {
+      body: { from: "resources/source.md", to: "resources/../escape.md" },
+      statusCode: 400,
+    },
+  ]
+
+  for (const attempt of attempts) {
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}/files/move`,
+      headers: jsonHeaders({ cookie }),
+      payload: JSON.stringify(attempt.body),
+    })
+
+    assert.equal(response.statusCode, attempt.statusCode)
+  }
+
+  assert.equal(await pathExists(path.join(projectDir(projectId), "resources/source.md")), true)
+  assert.equal(await pathExists(path.join(projectDir(projectId), "resources/folder/child/file.md")), true)
+})
+
 test("invalid MCP bearer attempts are rate limited", async () => {
   clearRateLimits()
 
@@ -328,6 +485,29 @@ test("project write routes reject path traversal", async () => {
   for (const url of attempts) {
     const response = await patchJson(url, cookie)
     assert.equal(response.statusCode, 400, url)
+  }
+
+  assert.equal(await fs.readFile(metadataPath, "utf8"), originalMetadata)
+})
+
+test("project folder routes reject path traversal", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-folder-paths")
+  const metadataPath = path.join(projectDir(projectId), "project.json")
+  const originalMetadata = await fs.readFile(metadataPath, "utf8")
+
+  for (const url of [
+    `/api/projects/${projectId}/resources/folders`,
+    `/api/projects/${projectId}/work/folders`,
+  ]) {
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: jsonHeaders({ cookie }),
+      payload: JSON.stringify({ folder: "../escape" }),
+    })
+
+    assert.equal(response.statusCode, 400)
   }
 
   assert.equal(await fs.readFile(metadataPath, "utf8"), originalMetadata)

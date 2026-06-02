@@ -66,7 +66,6 @@ data/<vault>/
         *.md
       automations/
       resources/
-        readme.md
       tasks/
         README.md
       logs/
@@ -90,7 +89,6 @@ Every project contains:
 - `roles/`: temporary roles selectable in chat.
 - `automations/`: project-specific automations.
 - `resources/`: raw material, inputs, sources, uploads, links, and notes.
-- `resources/readme.md`: ordered resource index.
 - `tasks/`: high-level project tasks.
 - `tasks/README.md`: task index with Markdown checkboxes.
 - `logs/activity/`: manual project log, append-only, segmented Markdown.
@@ -339,7 +337,7 @@ Current types:
 Rules:
 
 - readable and safe file names;
-- `resources/readme.md` keeps an ordered index;
+- folder views are built dynamically from the filesystem;
 - preview/download with correct MIME type;
 - Markdown editable from the UI.
 

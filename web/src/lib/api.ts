@@ -8,7 +8,6 @@ import type {
   CreateTaskRequest,
   DocsDetails,
   DocsSummary,
-  FileIndexItem,
   GitActionResult,
   MentionInboxPage,
   MyTaskGroup,
@@ -548,7 +547,7 @@ export async function addLinkArtifact(projectId: string, body: AddLinkArtifactRe
   )
 }
 
-export async function addExcalidrawArtifact(projectId: string, body: { title?: string; content?: string; author?: string }) {
+export async function addExcalidrawArtifact(projectId: string, body: { title?: string; content?: string; author?: string; folder?: string }) {
   return jsonRequest<{ name: string; path: string }>(
     `/api/projects/${projectId}/resources/excalidraw`,
     {
@@ -558,10 +557,13 @@ export async function addExcalidrawArtifact(projectId: string, body: { title?: s
   )
 }
 
-export async function uploadArtifact(projectId: string, file: File, author?: string) {
+export async function uploadArtifact(projectId: string, file: File, author?: string, folder?: string) {
   const formData = new FormData()
   if (author) {
     formData.set("author", author)
+  }
+  if (folder) {
+    formData.set("folder", folder)
   }
   formData.set("file", file)
 
@@ -571,6 +573,26 @@ export async function uploadArtifact(projectId: string, file: File, author?: str
       credentials: "same-origin",
       body: formData,
     })
+  )
+}
+
+export async function createProjectFolder(projectId: string, kind: "resources" | "work", folder: string) {
+  return jsonRequest<{ name: string; path: string }>(
+    `/api/projects/${projectId}/${kind}/folders`,
+    {
+      method: "POST",
+      body: JSON.stringify({ folder }),
+    }
+  )
+}
+
+export async function moveProjectEntry(projectId: string, from: string, to: string) {
+  return jsonRequest<{ from: string; to: string; moved: boolean; kind: "file" | "folder" }>(
+    `/api/projects/${projectId}/files/move`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ from, to }),
+    }
   )
 }
 
@@ -587,16 +609,6 @@ export async function createTask(projectId: string, body: CreateTaskRequest) {
 export async function updateTaskIndex(projectId: string, items: TaskIndexItem[]) {
   return jsonRequest<{ path: string; size: number; content: string }>(
     `/api/projects/${projectId}/tasks/readme`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ items }),
-    }
-  )
-}
-
-export async function updateArtifactIndex(projectId: string, items: FileIndexItem[]) {
-  return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/resources/readme`,
     {
       method: "PATCH",
       body: JSON.stringify({ items }),

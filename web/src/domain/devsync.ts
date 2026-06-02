@@ -20,12 +20,21 @@ export type ProjectFile = {
   name: string
   path: string
   kind: "resources" | "logs" | "work" | "tasks" | "docs"
+  folder?: string
   size: number
   title?: string | null
   owner?: string | null
   deadline?: string | null
   done?: boolean
   createdAt?: string | null
+  updatedAt: string
+}
+
+export type ProjectFolder = {
+  name: string
+  path: string
+  folder: string
+  kind: "resources" | "work"
   updatedAt: string
 }
 
@@ -150,6 +159,10 @@ export type ProjectDetails = ProjectSummary & {
     work: ProjectFile[]
     tasks?: ProjectFile[]
   }
+  folders: {
+    resources: ProjectFolder[]
+    work: ProjectFolder[]
+  }
 }
 
 export type MyTask = ProjectFile & {
@@ -173,6 +186,7 @@ export type AddTextArtifactRequest = {
   title: string
   content: string
   author?: string
+  folder?: string
 }
 
 export type AddLinkArtifactRequest = {
@@ -180,6 +194,7 @@ export type AddLinkArtifactRequest = {
   url: string
   notes?: string
   author?: string
+  folder?: string
 }
 
 export type AddLogRequest = {

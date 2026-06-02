@@ -16,7 +16,6 @@ const LEGACY_WORK_DIR = "generated"
 const PROJECT_DIRS = [RESOURCES_DIR, "logs", WORK_DIR, "tasks", "roles", "automations"]
 const LEGACY_ACTIVITY_LOG_FILE = "activity.md"
 const ACTIVITY_LOG_DIR = "activity"
-const RESOURCES_README_FILE = "readme.md"
 const TASKS_README_FILE = "README.md"
 const LEGACY_TASKS_README_FILE = "readme.md"
 const EXCALIDRAW_EXTENSION = ".excalidraw"
@@ -105,10 +104,6 @@ function activitySegmentPath(projectId, fileName) {
   return path.join(activityLogDirPath(projectId), fileName)
 }
 
-function resourceIndexPath(projectId) {
-  return path.join(projectPath(projectId), RESOURCES_DIR, RESOURCES_README_FILE)
-}
-
 function taskIndexPath(projectId) {
   return path.join(projectPath(projectId), "tasks", TASKS_README_FILE)
 }
@@ -117,16 +112,8 @@ function legacyTaskDirPath(projectId) {
   return path.join(projectPath(projectId), "plan")
 }
 
-function isArtifactIndexName(fileName) {
-  return String(fileName).toLowerCase() === RESOURCES_README_FILE
-}
-
 function isTaskIndexName(fileName) {
   return String(fileName).toLowerCase() === TASKS_README_FILE.toLowerCase()
-}
-
-function isArtifactIndexPath(relativePath) {
-  return String(relativePath).split(path.sep).join("/").toLowerCase() === `${RESOURCES_DIR}/${RESOURCES_README_FILE}`
 }
 
 function isTaskIndexPath(relativePath) {
@@ -168,6 +155,70 @@ function cleanFileName(input) {
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 140) || "file"
+}
+
+function cleanFolderPath(input) {
+  const raw = String(input ?? "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+
+  if (!raw) {
+    return ""
+  }
+
+  const parts = raw.split("/").filter(Boolean)
+  if (
+    parts.length > 8 ||
+    parts.some((part) => part === "." || part === ".." || part.startsWith("."))
+  ) {
+    throw storagePathError("Invalid folder path")
+  }
+
+  return parts.map(cleanFileName).filter(Boolean).join("/")
+}
+
+function projectSubdirPath(projectId, dirName, folder = "") {
+  const root = path.join(projectPath(projectId), canonicalProjectDirName(dirName))
+  const cleanFolder = cleanFolderPath(folder)
+  const target = cleanFolder ? path.resolve(root, cleanFolder) : root
+  const relative = path.relative(root, target)
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw storagePathError("Invalid folder path")
+  }
+
+  return target
+}
+
+function normalizeMovableProjectPath(value) {
+  const raw = String(value ?? "").trim()
+  const normalizedInput = raw.split("\\").join("/")
+  if (path.isAbsolute(normalizedInput)) {
+    throw storagePathError("Invalid file path")
+  }
+
+  const normalized = path.posix.normalize(canonicalProjectRelativePath(normalizedInput).replace(/^\/+/, ""))
+  const parts = normalized.split("/").filter(Boolean)
+  const root = parts[0]
+
+  if (
+    parts.length < 2 ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    parts.some((part) => part === "." || part === "..")
+  ) {
+    throw storagePathError("Invalid file path")
+  }
+
+  if (root !== RESOURCES_DIR && root !== WORK_DIR) {
+    throw storagePathError("Only resources and work paths can be moved")
+  }
+
+  return normalized
+}
+
+async function ensureProjectSubdir(projectId, dirName, folder = "") {
+  const target = projectSubdirPath(projectId, dirName, folder)
+  await ensureSafeDir(target)
+  return target
 }
 
 function canonicalProjectRelativePath(relativePath) {
@@ -616,80 +667,147 @@ function resolveDocFile(docId, relativePath) {
 async function listProjectFiles(projectId, dirName) {
   const files = []
   const usedPaths = new Set()
+  const canonicalDirName = canonicalProjectDirName(dirName)
+  const recursive = canonicalDirName === RESOURCES_DIR || canonicalDirName === WORK_DIR
 
   for (const candidate of projectDirCandidates(projectId, dirName)) {
-    let entries
+    async function visit(dir, parts = []) {
+      let entries
 
-    try {
-      entries = await fs.readdir(candidate.fullPath, { withFileTypes: true })
-    } catch (error) {
-      if (error.code === "ENOENT") {
-        continue
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true })
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          return
+        }
+
+        throw error
       }
 
-      throw error
-    }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name)
 
-    const candidateFiles = await Promise.all(
-      entries
-        .filter((entry) => {
-          if (!entry.isFile()) return false
-          if (canonicalProjectDirName(dirName) === RESOURCES_DIR && isArtifactIndexName(entry.name)) return false
-          if (dirName === "tasks" && isTaskIndexName(entry.name)) return false
-          return true
-        })
-        .map(async (entry) => {
-          const fullPath = path.join(candidate.fullPath, entry.name)
-          const stat = await fs.stat(fullPath)
-          let title = null
-          let owner = null
-          let deadline = null
-          let createdAt = null
+        if (entry.isSymbolicLink()) {
+          throw storagePathError()
+        }
 
-          if (isMarkdownName(entry.name)) {
-            try {
-              const parsed = parseFrontmatter(await safeReadTextFile(fullPath))
-              title = String(parsed.fields.title ?? "").trim() || titleFromMarkdown(parsed.body)
-              owner = String(parsed.fields.owner ?? "").trim() || null
-              deadline = String(parsed.fields.deadline ?? "").trim() || null
-              createdAt = String(parsed.fields.createdAt ?? "").trim() || null
-            } catch {
-              title = null
-            }
-          } else if (isExcalidrawName(entry.name)) {
-            try {
-              const parsed = JSON.parse(await safeReadTextFile(fullPath))
-              title = String(parsed?.appState?.name ?? "").trim() || null
-            } catch {
-              title = null
-            }
+        if (entry.isDirectory()) {
+          if (recursive) {
+            await visit(fullPath, [...parts, entry.name])
           }
+          continue
+        }
 
-          return {
-            name: entry.name,
-            path: `${candidate.publicDirName}/${entry.name}`,
-            kind: canonicalProjectDirName(dirName),
-            size: stat.size,
-            title,
-            owner,
-            deadline,
-            createdAt,
-            updatedAt: stat.mtime.toISOString(),
+        if (!entry.isFile()) continue
+        if (dirName === "tasks" && isTaskIndexName(entry.name)) continue
+
+        const stat = await fs.stat(fullPath)
+        let title = null
+        let owner = null
+        let deadline = null
+        let createdAt = null
+
+        if (isMarkdownName(entry.name)) {
+          try {
+            const parsed = parseFrontmatter(await safeReadTextFile(fullPath))
+            title = String(parsed.fields.title ?? "").trim() || titleFromMarkdown(parsed.body)
+            owner = String(parsed.fields.owner ?? "").trim() || null
+            deadline = String(parsed.fields.deadline ?? "").trim() || null
+            createdAt = String(parsed.fields.createdAt ?? "").trim() || null
+          } catch {
+            title = null
           }
-        })
-    )
+        } else if (isExcalidrawName(entry.name)) {
+          try {
+            const parsed = JSON.parse(await safeReadTextFile(fullPath))
+            title = String(parsed?.appState?.name ?? "").trim() || null
+          } catch {
+            title = null
+          }
+        }
 
-    for (const file of candidateFiles) {
-      if (usedPaths.has(file.path)) {
-        continue
+        const folder = parts.join("/")
+        const publicPath = [candidate.publicDirName, ...parts, entry.name].join("/")
+        if (usedPaths.has(publicPath)) {
+          continue
+        }
+
+        usedPaths.add(publicPath)
+        files.push({
+          name: entry.name,
+          path: publicPath,
+          folder,
+          kind: canonicalDirName,
+          size: stat.size,
+          title,
+          owner,
+          deadline,
+          createdAt,
+          updatedAt: stat.mtime.toISOString(),
+        })
       }
-
-      usedPaths.add(file.path)
-      files.push(file)
     }
+
+    await visit(candidate.fullPath)
   }
 
   return files.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
+async function listProjectFolders(projectId, dirName) {
+  const folders = []
+  const usedPaths = new Set()
+  const canonicalDirName = canonicalProjectDirName(dirName)
+
+  if (canonicalDirName !== RESOURCES_DIR && canonicalDirName !== WORK_DIR) {
+    return []
+  }
+
+  for (const candidate of projectDirCandidates(projectId, canonicalDirName)) {
+    async function visit(dir, parts = []) {
+      let entries
+
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true })
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          return
+        }
+
+        throw error
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          if (entry.isSymbolicLink()) throw storagePathError()
+          continue
+        }
+
+        const fullPath = path.join(dir, entry.name)
+        const nextParts = [...parts, entry.name]
+        const folder = parts.join("/")
+        const publicPath = [candidate.publicDirName, ...nextParts].join("/")
+
+        if (!usedPaths.has(publicPath)) {
+          const stat = await fs.stat(fullPath)
+          usedPaths.add(publicPath)
+          folders.push({
+            name: entry.name,
+            path: publicPath,
+            folder,
+            kind: candidate.publicDirName,
+            updatedAt: stat.mtime.toISOString(),
+          })
+        }
+
+        await visit(fullPath, nextParts)
+      }
+    }
+
+    await visit(candidate.fullPath)
+  }
+
+  return folders.sort((left, right) => left.path.localeCompare(right.path))
 }
 
 async function listDocFiles(docId) {
@@ -939,52 +1057,6 @@ async function readTaskIndexItems(projectId) {
     }
 
     throw error
-  }
-}
-
-async function readArtifactIndexItems(projectId) {
-  try {
-    return parseIndexItems(await safeReadTextFile(resourceIndexPath(projectId)), RESOURCES_DIR, RESOURCES_README_FILE)
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return []
-    }
-
-    throw error
-  }
-}
-
-export async function ensureArtifactIndex(projectId) {
-  await ensureProjectDirs(projectId)
-
-  const files = await listProjectFiles(projectId, RESOURCES_DIR)
-  const content = buildIndexContent({
-    title: "Resources",
-    files,
-    preferredItems: await readArtifactIndexItems(projectId),
-    dirName: RESOURCES_DIR,
-    readmeName: RESOURCES_README_FILE,
-  })
-  const target = resourceIndexPath(projectId)
-
-  try {
-    if ((await safeReadTextFile(target)) === content) {
-      return {
-        path: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
-        content,
-      }
-    }
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error
-    }
-  }
-
-  await safeWriteTextFile(target, content)
-
-  return {
-    path: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
-    content,
   }
 }
 
@@ -1617,7 +1689,6 @@ export async function createProject(input) {
 
   await writeProjectMetadata(projectId, metadata)
   await ensureActivityLog(projectId)
-  await ensureArtifactIndex(projectId)
   await ensureTaskIndex(projectId)
   await safeWriteTextFile(
     path.join(root, "README.md"),
@@ -1694,14 +1765,15 @@ export async function updateProject(projectId, input) {
 export async function getProject(projectId, options = {}) {
   await ensureProjectDirs(projectId)
   await ensureActivityLog(projectId)
-  await ensureArtifactIndex(projectId)
   await ensureTaskIndex(projectId)
-  const [metadata, resources, logs, work, tasks, activity] = await Promise.all([
+  const [metadata, resources, logs, work, tasks, resourceFolders, workFolders, activity] = await Promise.all([
     getProjectMetadata(projectId),
     listProjectFiles(projectId, RESOURCES_DIR),
     listProjectFiles(projectId, "logs"),
     listProjectFiles(projectId, WORK_DIR),
     listProjectFiles(projectId, "tasks"),
+    listProjectFolders(projectId, RESOURCES_DIR),
+    listProjectFolders(projectId, WORK_DIR),
     getActivityLog(projectId, { files: options.activityFiles }),
   ])
 
@@ -1713,6 +1785,10 @@ export async function getProject(projectId, options = {}) {
       logs,
       work,
       tasks,
+    },
+    folders: {
+      resources: resourceFolders,
+      work: workFolders,
     },
     counts: {
       resources: resources.length,
@@ -1734,7 +1810,7 @@ export async function addTextArtifact(projectId, input) {
     throw Object.assign(new Error("Content is required"), { statusCode: 400 })
   }
 
-  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
+  const dir = await ensureProjectSubdir(projectId, RESOURCES_DIR, input?.folder)
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
   const document = markdownDocument(title, content, {
     type: "text",
@@ -1752,7 +1828,6 @@ export async function addTextArtifact(projectId, input) {
     title: `Added ${title}`,
     content: `Added resource [${markdownLinkLabel(title)}](../${relativePath}).`,
   })
-  await ensureArtifactIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.created",
@@ -1783,7 +1858,7 @@ export async function addLinkArtifact(projectId, input) {
   const created = nowIso()
   const creator = String(input?.author ?? input?.creator ?? "team").trim() || "team"
   const body = [`Source: ${url}`, notes ? `\n${notes}` : ""].join("\n")
-  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
+  const dir = await ensureProjectSubdir(projectId, RESOURCES_DIR, input?.folder)
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
   const document = markdownDocument(title, body, {
     type: "link",
@@ -1803,7 +1878,6 @@ export async function addLinkArtifact(projectId, input) {
     title: `Added ${title}`,
     content: `Added resource [${markdownLinkLabel(title)}](../${relativePath}).`,
   })
-  await ensureArtifactIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.created",
@@ -1880,7 +1954,7 @@ export async function addExcalidrawArtifact(projectId, input = {}) {
   const created = nowIso()
   const creator = String(input?.author ?? input?.creator ?? "team").trim() || "team"
   const content = normalizeExcalidrawContent(input?.content, title)
-  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
+  const dir = await ensureProjectSubdir(projectId, RESOURCES_DIR, input?.folder)
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}${EXCALIDRAW_EXTENSION}`)
 
   await safeWriteTextFile(target, content)
@@ -1893,7 +1967,6 @@ export async function addExcalidrawArtifact(projectId, input = {}) {
     title: `Added ${title}`,
     content: `Added drawing [${markdownLinkLabel(title)}](../${relativePath}).`,
   })
-  await ensureArtifactIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.created",
@@ -2130,49 +2203,6 @@ export async function updateTaskIndex(projectId, input = {}) {
   }
 }
 
-export async function updateArtifactIndex(projectId, input = {}) {
-  await ensureProjectDirs(projectId)
-
-  const files = await listProjectFiles(projectId, RESOURCES_DIR)
-  const requestedItems = Array.isArray(input.items)
-    ? input.items.map((item) => ({
-        path: normalizeIndexPath(canonicalProjectRelativePath(item?.path), RESOURCES_DIR, RESOURCES_README_FILE),
-      }))
-    : typeof input.content === "string"
-      ? parseIndexItems(input.content, RESOURCES_DIR, RESOURCES_README_FILE)
-      : await readArtifactIndexItems(projectId)
-  const content = buildIndexContent({
-    title: "Resources",
-    files,
-    preferredItems: requestedItems,
-    dirName: RESOURCES_DIR,
-    readmeName: RESOURCES_README_FILE,
-  })
-  const target = resourceIndexPath(projectId)
-  const existingRaw = await safeReadTextFile(target).catch((error) => {
-    if (error.code === "ENOENT") return ""
-    throw error
-  })
-
-  await safeWriteTextFile(target, content)
-  await touchProject(projectId)
-  await appendSystemLogEvent({
-    action: "resource_index.updated",
-    source: input?.source ?? "storage",
-    actor: input?.author ?? input?.editor ?? "team",
-    projectId,
-    target: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
-    summary: "Updated resource index",
-  })
-  await appendMentionEventsForWrite(projectId, `${RESOURCES_DIR}/${RESOURCES_README_FILE}`, existingRaw, content, input, "resource")
-
-  return {
-    path: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
-    size: Buffer.byteLength(content, "utf8"),
-    content,
-  }
-}
-
 export async function addLog(projectId, input) {
   await ensureProjectDirs(projectId)
   await ensureActivityLog(projectId)
@@ -2190,7 +2220,7 @@ export async function addLog(projectId, input) {
   let logContent = content
 
   if (content.length > ACTIVITY_INLINE_MAX_CHARS) {
-    const dir = path.join(projectPath(projectId), RESOURCES_DIR)
+    const dir = await ensureProjectSubdir(projectId, RESOURCES_DIR)
     const target = await uniquePath(dir, `${dateStamp(new Date(createdAt))}-${slugify(title)}.md`)
     const document = markdownDocument(title, content, {
       type: "activity-log",
@@ -2203,7 +2233,6 @@ export async function addLog(projectId, input) {
     kind = "artifact"
     artifactPath = projectRelative(projectId, target)
     logContent = `Long update archived as [${title}](../${artifactPath}).`
-    await ensureArtifactIndex(projectId)
   }
 
   const entry = await appendActivityEntry(projectId, {
@@ -2243,7 +2272,7 @@ export async function saveUpload(projectId, filePart, input = {}) {
     throw Object.assign(new Error("File is required"), { statusCode: 400 })
   }
 
-  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
+  const dir = await ensureProjectSubdir(projectId, RESOURCES_DIR, input?.folder)
   const target = await uniquePath(dir, cleanFileName(filePart.filename))
   await safeUploadStream(target, filePart.file)
   const relativePath = projectRelative(projectId, target)
@@ -2254,7 +2283,6 @@ export async function saveUpload(projectId, filePart, input = {}) {
     title: `Uploaded ${path.basename(target)}`,
     content: `Uploaded resource [${path.basename(target)}](../${relativePath}).`,
   })
-  await ensureArtifactIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.uploaded",
@@ -2271,8 +2299,143 @@ export async function saveUpload(projectId, filePart, input = {}) {
   }
 }
 
+export async function createProjectFolder(projectId, dirName, input = {}) {
+  await ensureProjectDirs(projectId)
+  const canonicalDirName = canonicalProjectDirName(dirName)
+
+  if (canonicalDirName !== RESOURCES_DIR && canonicalDirName !== WORK_DIR) {
+    throw Object.assign(new Error("Only resources and work folders can be created"), { statusCode: 400 })
+  }
+
+  const folder = cleanFolderPath(input?.folder ?? input?.path)
+  if (!folder) {
+    throw Object.assign(new Error("Folder path is required"), { statusCode: 400 })
+  }
+
+  const target = await ensureProjectSubdir(projectId, canonicalDirName, folder)
+  await touchProject(projectId)
+  await appendSystemLogEvent({
+    action: "folder.created",
+    source: input?.source ?? "storage",
+    actor: input?.author ?? input?.creator ?? "team",
+    projectId,
+    target: `${canonicalDirName}/${folder}`,
+    summary: `Created ${canonicalDirName} folder ${folder}`,
+  })
+
+  return {
+    path: `${canonicalDirName}/${folder}`,
+    name: path.basename(target),
+  }
+}
+
+export async function moveProjectEntry(projectId, input = {}) {
+  await ensureProjectDirs(projectId)
+
+  const from = normalizeMovableProjectPath(input?.from)
+  const to = normalizeMovableProjectPath(input?.to)
+  const fromRoot = from.split("/", 1)[0]
+  const toRoot = to.split("/", 1)[0]
+
+  if (fromRoot !== toRoot) {
+    throw Object.assign(new Error("Files and folders can only move within the same area"), { statusCode: 400 })
+  }
+
+  const projectRoot = projectPath(projectId)
+  const source = resolveProjectFile(projectId, from)
+
+  let sourceStat
+  try {
+    sourceStat = await fs.lstat(source)
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw Object.assign(new Error("Source file or folder not found"), { statusCode: 404 })
+    }
+
+    throw error
+  }
+
+  if (sourceStat.isSymbolicLink()) {
+    throw storagePathError()
+  }
+
+  await assertRealPathInside(vaultDir, source)
+
+  if (!sourceStat.isFile() && !sourceStat.isDirectory()) {
+    throw Object.assign(new Error("Only files and folders can be moved"), { statusCode: 400 })
+  }
+
+  const kind = sourceStat.isDirectory() ? "folder" : "file"
+  if (from === to) {
+    return { from, to, moved: false, kind }
+  }
+
+  const target = path.resolve(projectRoot, to)
+  const targetRelative = path.relative(projectRoot, target)
+  if (targetRelative.startsWith("..") || path.isAbsolute(targetRelative)) {
+    throw storagePathError()
+  }
+
+  const bucketRoot = projectSubdirPath(projectId, toRoot)
+  if (!pathInside(bucketRoot, target)) {
+    throw storagePathError()
+  }
+
+  if (sourceStat.isDirectory() && pathInside(source, target)) {
+    throw Object.assign(new Error("Cannot move a folder into itself"), { statusCode: 400 })
+  }
+
+  try {
+    await fs.lstat(target)
+    throw Object.assign(new Error("Target already exists"), { statusCode: 409 })
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error
+    }
+  }
+
+  const targetParent = path.dirname(target)
+  if (!pathInside(bucketRoot, targetParent)) {
+    throw storagePathError()
+  }
+
+  let parentStat
+  try {
+    parentStat = await fs.lstat(targetParent)
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw Object.assign(new Error("Target folder does not exist"), { statusCode: 400 })
+    }
+
+    throw error
+  }
+
+  if (parentStat.isSymbolicLink()) {
+    throw storagePathError()
+  }
+
+  if (!parentStat.isDirectory()) {
+    throw Object.assign(new Error("Target parent is not a folder"), { statusCode: 400 })
+  }
+
+  await assertRealPathInside(vaultDir, targetParent)
+  await fs.rename(source, target)
+  await touchProject(projectId)
+  await appendSystemLogEvent({
+    action: "file.moved",
+    source: input?.source ?? "storage",
+    actor: input?.author ?? input?.editor ?? "team",
+    projectId,
+    target: to,
+    summary: `Moved ${kind} to ${to}`,
+    metadata: { previousPath: from, kind },
+  })
+
+  return { from, to, moved: true, kind }
+}
+
 function resolveArtifactFile(projectId, relativePath) {
-  return resolveProjectSubdirFile(projectId, relativePath, RESOURCES_DIR, "Only resource files can be changed", isArtifactIndexPath)
+  return resolveProjectSubdirFile(projectId, relativePath, RESOURCES_DIR, "Only resource files can be changed")
 }
 
 function resolveTaskFile(projectId, relativePath) {
@@ -2287,7 +2450,6 @@ export async function deleteArtifact(projectId, relativePath) {
   await ensureProjectDirs(projectId)
   const fullPath = resolveArtifactFile(projectId, relativePath)
   await safeUnlinkFile(fullPath)
-  await ensureArtifactIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.deleted",
@@ -2370,7 +2532,6 @@ export async function updateMarkdownArtifact(projectId, relativePath, input = {}
   await ensureProjectDirs(projectId)
   const fullPath = resolveArtifactFile(projectId, relativePath)
   const saved = await updateMarkdownProjectFile(projectId, fullPath, input, "resources")
-  await ensureArtifactIndex(projectId)
   await appendSystemLogEvent({
     action: "artifact.updated",
     source: input?.source ?? "storage",
@@ -2397,7 +2558,6 @@ export async function updateExcalidrawArtifact(projectId, relativePath, input = 
 
   const content = normalizeExcalidrawContent(input.content, input.title)
   await safeWriteTextFile(fullPath, content)
-  await ensureArtifactIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.updated",
@@ -2590,10 +2750,6 @@ export async function toggleTask(projectId, relativePath, done) {
 
 export async function readProjectFile(projectId, relativePath) {
   const normalizedPath = canonicalProjectRelativePath(relativePath)
-
-  if (isArtifactIndexPath(normalizedPath)) {
-    await ensureArtifactIndex(projectId)
-  }
 
   if (isTaskIndexPath(normalizedPath)) {
     await ensureTaskIndex(projectId)

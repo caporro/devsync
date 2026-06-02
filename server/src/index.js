@@ -27,6 +27,7 @@ import {
   addTextArtifact,
   createTask,
   createProject,
+  createProjectFolder,
   createDocFileStream,
   createProjectFileStream,
   dataDir,
@@ -41,10 +42,10 @@ import {
   listDocs,
   listTasks,
   listProjects,
+  moveProjectEntry,
   readDocFile,
   readProjectFile,
   saveUpload,
-  updateArtifactIndex,
   updateExcalidrawArtifact,
   updateGeneratedMarkdown,
   updateTaskIndex,
@@ -699,6 +700,7 @@ app.post("/api/projects/:projectId/resources/upload", async (request, reply) => 
     const file = await request.file()
     const resource = await saveUpload(request.params.projectId, file, {
       author: file?.fields?.author?.value,
+      folder: file?.fields?.folder?.value,
     })
     reply.code(201).send(resource)
     const resourceKind = path.extname(resource.name).toLowerCase() === ".md" ? "markdown" : "file"
@@ -712,6 +714,30 @@ app.post("/api/projects/:projectId/resources/upload", async (request, reply) => 
         artifactKind: resourceKind,
       },
     }, request.log)
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.post("/api/projects/:projectId/resources/folders", async (request, reply) => {
+  try {
+    reply.code(201).send(await createProjectFolder(request.params.projectId, "resources", request.body ?? {}))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.post("/api/projects/:projectId/work/folders", async (request, reply) => {
+  try {
+    reply.code(201).send(await createProjectFolder(request.params.projectId, "work", request.body ?? {}))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+
+app.patch("/api/projects/:projectId/files/move", async (request, reply) => {
+  try {
+    reply.send(await moveProjectEntry(request.params.projectId, request.body ?? {}))
   } catch (error) {
     sendError(reply, error)
   }
@@ -741,14 +767,6 @@ app.patch("/api/projects/:projectId/plan/toggle", withTaskErrorBoundary(updatePr
 
 app.delete("/api/projects/:projectId/tasks", withTaskErrorBoundary(deleteProjectTaskLegacy))
 app.delete("/api/projects/:projectId/plan", withTaskErrorBoundary(deleteProjectTaskLegacy))
-
-app.patch("/api/projects/:projectId/resources/readme", async (request, reply) => {
-  try {
-    reply.send(await updateArtifactIndex(request.params.projectId, request.body ?? {}))
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
 
 app.patch("/api/projects/:projectId/resources", async (request, reply) => {
   try {
