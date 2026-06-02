@@ -64,7 +64,7 @@ function humanizeProjectId(projectId) {
 }
 
 function assertProjectId(projectId) {
-  if (!/^[a-z0-9][a-z0-9_-]*$/.test(projectId)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(projectId)) {
     throw Object.assign(new Error("Invalid project id"), { statusCode: 400 })
   }
 }
@@ -1409,7 +1409,6 @@ export async function getProjectMetadata(projectId) {
     }
 
     metadata = await inferProjectMetadata(projectId)
-    await writeProjectMetadata(projectId, metadata)
   }
 
   return {

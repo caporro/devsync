@@ -141,9 +141,9 @@ test("login failures are rate limited", async () => {
   assert.ok(Number(blocked.headers["retry-after"]) > 0)
 })
 
-test("project folders without metadata are listed and repaired", async () => {
+test("project folders without metadata are listed and repaired on write", async () => {
   const cookie = await login()
-  const projectId = "manual-import"
+  const projectId = "20-Manual-Import"
   const root = projectDir(projectId)
 
   await fs.mkdir(root, { recursive: true })
@@ -158,9 +158,20 @@ test("project folders without metadata are listed and repaired", async () => {
   assert.equal(response.statusCode, 200)
   const project = response.json().items.find((item) => item.id === projectId)
   assert.ok(project)
-  assert.equal(project.name, "manual import")
+  assert.equal(project.name, "20 Manual Import")
+  assert.equal(await pathExists(path.join(root, "project.json")), false)
+
+  const update = await app.inject({
+    method: "PATCH",
+    url: `/api/projects/${projectId}`,
+    headers: jsonHeaders({ cookie }),
+    payload: JSON.stringify({ owner: "team" }),
+  })
+
+  assert.equal(update.statusCode, 200)
 
   const metadata = JSON.parse(await fs.readFile(path.join(root, "project.json"), "utf8"))
+  assert.equal(metadata.owner, "team")
   assert.equal(metadata.status, "active")
   assert.deepEqual(metadata.tags, [])
 })
