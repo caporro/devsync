@@ -128,7 +128,7 @@ docker run -d \
   -e AUTH_SESSION_SECRET='change-me-to-a-long-random-string-at-least-32-chars' \
   -e AUTH_COOKIE_SECURE=true \
   -e OPENAI_API_KEY='sk-...' \
-  caporro/devsync:0.1.1
+  caporro/devsync:0.1.24
 ```
 
 Notes:
