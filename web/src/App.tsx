@@ -3,7 +3,9 @@ import type { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, ReactNode, RefOb
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  Activity01Icon,
   AddCircleIcon,
+  AiChat01Icon,
   ArrowDown03Icon,
   ArrowUp03Icon,
   Copy01Icon,
@@ -15,6 +17,7 @@ import {
   FileCodeIcon,
   FileImageIcon,
   FileLinkIcon,
+  FileScriptIcon,
   FileUnknownIcon,
   FilterIcon,
   FloppyDiskIcon,
@@ -315,6 +318,37 @@ function projectMarkdownAssetUrl(projectId: string, url: string) {
   return path ? downloadUrl(projectId, path) : url
 }
 
+function markdownDocsFilePath(currentPath: string, url: string) {
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\/api\/)/i.test(url)) {
+    return null
+  }
+
+  let normalized = url.split(/[?#]/, 1)[0].replace(/\\/g, "/")
+
+  try {
+    normalized = decodeURIComponent(normalized)
+  } catch {
+    // Keep the original path if it is not URI encoded.
+  }
+
+  const stack = currentPath.split("/").slice(0, -1).filter(Boolean)
+  for (const part of normalized.replace(/^\/+/, "").split("/").filter(Boolean)) {
+    if (part === ".") continue
+    if (part === "..") {
+      stack.pop()
+      continue
+    }
+    stack.push(part)
+  }
+
+  return stack.length ? stack.join("/") : null
+}
+
+function docsMarkdownAssetUrl(docId: string, currentPath: string, url: string) {
+  const path = markdownDocsFilePath(currentPath, url)
+  return path ? docsDownloadUrl(docId, path) : url
+}
+
 function emptyRoute(mainView: MainView = "activity"): AppRoute {
   return {
     mainView,
@@ -601,7 +635,11 @@ function iconForFile(fileName: string) {
     return FileImageIcon
   }
 
-  if (extension === ".md" || extension === ".txt" || extension === ".log") {
+  if (extension === ".md") {
+    return FileScriptIcon
+  }
+
+  if (extension === ".txt" || extension === ".log") {
     return Txt01Icon
   }
 
@@ -1686,22 +1724,24 @@ function ProjectRail({
       <section className="space-y-1">
         <button
           className={cn(
-            "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-muted",
+            "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-muted",
             view === "activity" && activePath === null && "bg-muted text-foreground"
           )}
           onClick={onOpenActivity}
           type="button"
         >
+          <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={Activity01Icon} strokeWidth={2} />
           <span>Project Log</span>
         </button>
         <button
           className={cn(
-            "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-muted",
+            "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-muted",
             view === "agents" && "bg-muted text-foreground"
           )}
           onClick={onOpenAssistant}
           type="button"
         >
+          <HugeiconsIcon className="size-4 shrink-0 text-muted-foreground" icon={AiChat01Icon} strokeWidth={2} />
           <span>Assistant</span>
         </button>
         <button
@@ -2494,13 +2534,15 @@ function AssistantChatView({
   )
 }
 
-function ConfigView({
+function ProjectConfigForm({
   isSaving,
   name,
+  nameHelp,
   owner,
   ownerOptions,
   status,
   statusOptions,
+  submitLabel,
   tags,
   onNameChange,
   onOwnerChange,
@@ -2510,10 +2552,12 @@ function ConfigView({
 }: {
   isSaving: boolean
   name: string
+  nameHelp: string
   owner: string
   ownerOptions: string[]
   status: string
   statusOptions: string[]
+  submitLabel: string
   tags: string
   onNameChange: (value: string) => void
   onOwnerChange: (value: string) => void
@@ -2522,65 +2566,122 @@ function ConfigView({
   onTagsChange: (value: string) => void
 }) {
   return (
+    <form className="grid gap-4 rounded-lg border border-border bg-card p-4" onSubmit={onSubmit}>
+      <label className="grid gap-1.5 text-sm">
+        <span className="font-medium text-foreground">Name / folder</span>
+        <Input name="project-name" onChange={(event) => onNameChange(event.target.value)} value={name} />
+        <span className="text-xs text-muted-foreground">{nameHelp}</span>
+      </label>
+      <label className="grid gap-1.5 text-sm">
+        <span className="font-medium text-foreground">Owner</span>
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          name="project-owner"
+          onChange={(event) => onOwnerChange(event.target.value)}
+          value={owner}
+        >
+          <option value="">Unassigned</option>
+          {optionsWithCurrent(ownerOptions, owner).map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="grid gap-1.5 text-sm">
+        <span className="font-medium text-foreground">Status</span>
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          name="project-status"
+          onChange={(event) => onStatusChange(event.target.value)}
+          value={status}
+        >
+          {optionsWithCurrent(statusOptions, status).map((item) => (
+            <option key={item} value={item}>
+              {labelFromValue(item)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="grid gap-1.5 text-sm">
+        <span className="font-medium text-foreground">Tags</span>
+        <Input
+          name="project-tags"
+          onChange={(event) => onTagsChange(event.target.value)}
+          placeholder="backend, migration"
+          value={tags}
+        />
+      </label>
+      <div className="flex justify-end">
+        <Button disabled={isSaving || !name.trim()} type="submit">
+          {submitLabel}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function ConfigView(props: Omit<Parameters<typeof ProjectConfigForm>[0], "nameHelp" | "submitLabel">) {
+  return (
     <section className="mx-auto max-w-3xl">
       <div className="mb-5">
         <h1 className="text-xl font-semibold text-foreground">Project config</h1>
         <div className="mt-1 text-xs text-muted-foreground">Folder-backed project settings</div>
       </div>
 
-      <form className="grid gap-4 rounded-lg border border-border bg-card p-4" onSubmit={onSubmit}>
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium text-foreground">Name / folder</span>
-          <Input name="project-name" onChange={(event) => onNameChange(event.target.value)} value={name} />
-          <span className="text-xs text-muted-foreground">Saving this field renames the project folder.</span>
-        </label>
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium text-foreground">Owner</span>
-          <select
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-            name="project-owner"
-            onChange={(event) => onOwnerChange(event.target.value)}
-            value={owner}
-          >
-            <option value="">Unassigned</option>
-            {optionsWithCurrent(ownerOptions, owner).map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium text-foreground">Status</span>
-          <select
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-            name="project-status"
-            onChange={(event) => onStatusChange(event.target.value)}
-            value={status}
-          >
-            {optionsWithCurrent(statusOptions, status).map((item) => (
-              <option key={item} value={item}>
-                {labelFromValue(item)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium text-foreground">Tags</span>
-          <Input
-            name="project-tags"
-            onChange={(event) => onTagsChange(event.target.value)}
-            placeholder="backend, migration"
-            value={tags}
-          />
-        </label>
-        <div className="flex justify-end">
-          <Button disabled={isSaving || !name.trim()} type="submit">
-            Save config
-          </Button>
-        </div>
-      </form>
+      <ProjectConfigForm
+        {...props}
+        nameHelp="Saving this field renames the project folder."
+        submitLabel="Save config"
+      />
     </section>
+  )
+}
+
+function ProjectCreateDialog({
+  isSaving,
+  name,
+  open,
+  owner,
+  ownerOptions,
+  status,
+  statusOptions,
+  tags,
+  onNameChange,
+  onOpenChange,
+  onOwnerChange,
+  onStatusChange,
+  onSubmit,
+  onTagsChange,
+}: Omit<Parameters<typeof ProjectConfigForm>[0], "nameHelp" | "submitLabel"> & {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>New project</DialogTitle>
+          <DialogDescription>Create the project folder and metadata.</DialogDescription>
+        </DialogHeader>
+        <ProjectConfigForm
+          isSaving={isSaving}
+          name={name}
+          nameHelp="This creates the project folder."
+          owner={owner}
+          ownerOptions={ownerOptions}
+          status={status}
+          statusOptions={statusOptions}
+          submitLabel="Create project"
+          tags={tags}
+          onNameChange={onNameChange}
+          onOwnerChange={onOwnerChange}
+          onStatusChange={onStatusChange}
+          onSubmit={onSubmit}
+          onTagsChange={onTagsChange}
+        />
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -4125,6 +4226,11 @@ function WorkspaceApp({
   const [configOwner, setConfigOwner] = useState("")
   const [configStatus, setConfigStatus] = useState("")
   const [configTags, setConfigTags] = useState("")
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false)
+  const [createProjectName, setCreateProjectName] = useState("")
+  const [createProjectOwner, setCreateProjectOwner] = useState("")
+  const [createProjectStatus, setCreateProjectStatus] = useState("active")
+  const [createProjectTags, setCreateProjectTags] = useState("")
   const [gitResult, setGitResult] = useState<GitActionResult | null>(null)
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(initialRoute.agentThreadId)
   const [selectedAssistantRole, setSelectedAssistantRole] = useState("")
@@ -4439,6 +4545,12 @@ function WorkspaceApp({
   const resolveMarkdownAssetUrl = useCallback(
     (url: string) => (selectedProjectId ? projectMarkdownAssetUrl(selectedProjectId, url) : url),
     [selectedProjectId]
+  )
+  const resolveDocsMarkdownAssetUrl = useCallback(
+    (url: string) => selectedDocId
+      ? docsMarkdownAssetUrl(selectedDocId, selectedDocFilePath ?? "README.md", url)
+      : url,
+    [selectedDocFilePath, selectedDocId]
   )
 
   const handleUploadMarkdownImage = useCallback(
@@ -5118,35 +5230,50 @@ function WorkspaceApp({
     }
   }
 
-  async function handleCreateProject() {
+  function resetCreateProjectDialog() {
+    setCreateProjectName("")
+    setCreateProjectOwner("")
+    setCreateProjectStatus("active")
+    setCreateProjectTags("")
+  }
+
+  function handleCreateProject() {
     if (!canLeaveDrawing()) {
       return
     }
 
-    const name = window.prompt("Project name")
+    setCreateProjectDialogOpen(true)
+  }
 
-    if (!name?.trim()) {
+  async function handleCreateProjectSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!createProjectName.trim()) {
       return
     }
 
-    const owner = window.prompt("Owner") ?? ""
-
     await run("create-project", async () => {
       const created = await createProject({
-        name: name.trim(),
-        owner: owner.trim(),
-        status: "active",
+        name: createProjectName.trim(),
+        owner: createProjectOwner.trim(),
+        status: createProjectStatus.trim() || "active",
+        tags: createProjectTags.split(",").map((item) => item.trim()).filter(Boolean),
       })
       setSelectedProjectId(created.id)
       setSelectedDocId(null)
       setSelectedArtifactPath(null)
+      setSelectedGeneratedPath(null)
       setSelectedTaskPath(null)
+      setSelectedResourceFolder("")
+      setSelectedWorkFolder("")
       setUnsavedDrawingPath(null)
       setSelectedDocFilePath(null)
       setMainView("activity")
       setPlaceholderTitle("")
       isLoadingOlderRef.current = false
       setIsLoadingOlderActivity(false)
+      setCreateProjectDialogOpen(false)
+      resetCreateProjectDialog()
       await refresh(created.id)
     })
   }
@@ -6496,6 +6623,12 @@ function WorkspaceApp({
                             />
                           </div>
                         </section>
+                      ) : isMarkdownFile(selectedDocFile.name) ? (
+                        <MarkdownViewer
+                          content={docFileQuery.data}
+                          isLoading={docFileQuery.isLoading}
+                          resolveUrl={resolveDocsMarkdownAssetUrl}
+                        />
                       ) : isTextFile(selectedDocFile.name) ? (
                         <TextFileView
                           content={docFileQuery.data}
@@ -6518,9 +6651,10 @@ function WorkspaceApp({
                         </section>
                       )
                     ) : (
-                      <TextFileView
+                      <MarkdownViewer
                         content={docsFolderQuery.isLoading ? "" : docsFolder?.readme || "README.md not found."}
                         isLoading={docsFolderQuery.isLoading}
+                        resolveUrl={resolveDocsMarkdownAssetUrl}
                       />
                     )
                   ) : mainView === "agents" ? (
@@ -7060,6 +7194,27 @@ function WorkspaceApp({
           )}
         </section>
       </SidebarInset>
+        <ProjectCreateDialog
+          isSaving={busyAction === "create-project"}
+          name={createProjectName}
+          open={createProjectDialogOpen}
+          owner={createProjectOwner}
+          ownerOptions={ownerOptions}
+          status={createProjectStatus}
+          statusOptions={PROJECT_STATUS_OPTIONS}
+          tags={createProjectTags}
+          onNameChange={setCreateProjectName}
+          onOpenChange={(open) => {
+            setCreateProjectDialogOpen(open)
+            if (!open) {
+              resetCreateProjectDialog()
+            }
+          }}
+          onOwnerChange={setCreateProjectOwner}
+          onStatusChange={setCreateProjectStatus}
+          onSubmit={handleCreateProjectSubmit}
+          onTagsChange={setCreateProjectTags}
+        />
         <ArtifactDialog
           busy={busyAction === "artifact"}
           file={artifactFile}
