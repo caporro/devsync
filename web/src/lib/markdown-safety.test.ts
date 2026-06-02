@@ -6,7 +6,8 @@ describe("markdown safety", () => {
   it("keeps only safe external and project markdown links", () => {
     expect(safeMarkdownHref("https://example.com/a")).toBe("https://example.com/a")
     expect(safeMarkdownHref("mailto:team@example.com")).toBe("mailto:team@example.com")
-    expect(safeMarkdownHref("../artifacts/report.md")).toBe("artifacts/report.md")
+    expect(safeMarkdownHref("../artifacts/report.md")).toBe("resources/report.md")
+    expect(safeMarkdownHref("../generated/report.md")).toBe("work/report.md")
     expect(safeMarkdownHref("javascript:alert(1)")).toBeNull()
     expect(safeMarkdownHref("data:text/html,boom")).toBeNull()
   })
@@ -21,7 +22,7 @@ describe("markdown safety", () => {
 
     expect(sanitizeMarkdownLinks(markdown)).toBe([
       "[safe](https://example.com)",
-      "[project](artifacts/report.md)",
+      "[project](resources/report.md)",
       "bad",
       "bad image",
     ].join("\n"))

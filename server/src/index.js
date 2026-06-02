@@ -652,61 +652,64 @@ app.post("/api/projects/:projectId/logs", async (request, reply) => {
   }
 })
 
-app.post("/api/projects/:projectId/artifacts/text", async (request, reply) => {
+app.post("/api/projects/:projectId/resources/text", async (request, reply) => {
   try {
-    const artifact = await addTextArtifact(request.params.projectId, request.body ?? {})
-    reply.code(201).send(artifact)
+    const resource = await addTextArtifact(request.params.projectId, request.body ?? {})
+    reply.code(201).send(resource)
     void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
-      payload: { artifact, artifactKind: "markdown" },
+      payload: { resource, resourceKind: "markdown", artifact: resource, artifactKind: "markdown" },
     }, request.log)
   } catch (error) {
     sendError(reply, error)
   }
 })
 
-app.post("/api/projects/:projectId/artifacts/link", async (request, reply) => {
+app.post("/api/projects/:projectId/resources/link", async (request, reply) => {
   try {
-    const artifact = await addLinkArtifact(request.params.projectId, request.body ?? {})
-    reply.code(201).send(artifact)
+    const resource = await addLinkArtifact(request.params.projectId, request.body ?? {})
+    reply.code(201).send(resource)
     void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
-      payload: { artifact, artifactKind: "link" },
+      payload: { resource, resourceKind: "link", artifact: resource, artifactKind: "link" },
     }, request.log)
   } catch (error) {
     sendError(reply, error)
   }
 })
 
-app.post("/api/projects/:projectId/artifacts/excalidraw", async (request, reply) => {
+app.post("/api/projects/:projectId/resources/excalidraw", async (request, reply) => {
   try {
-    const artifact = await addExcalidrawArtifact(request.params.projectId, request.body ?? {})
-    reply.code(201).send(artifact)
+    const resource = await addExcalidrawArtifact(request.params.projectId, request.body ?? {})
+    reply.code(201).send(resource)
     void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
-      payload: { artifact, artifactKind: "excalidraw" },
+      payload: { resource, resourceKind: "excalidraw", artifact: resource, artifactKind: "excalidraw" },
     }, request.log)
   } catch (error) {
     sendError(reply, error)
   }
 })
 
-app.post("/api/projects/:projectId/artifacts/upload", async (request, reply) => {
+app.post("/api/projects/:projectId/resources/upload", async (request, reply) => {
   try {
     const file = await request.file()
-    const artifact = await saveUpload(request.params.projectId, file, {
+    const resource = await saveUpload(request.params.projectId, file, {
       author: file?.fields?.author?.value,
     })
-    reply.code(201).send(artifact)
+    reply.code(201).send(resource)
+    const resourceKind = path.extname(resource.name).toLowerCase() === ".md" ? "markdown" : "file"
     void emitAutomationEvent({
       type: "artifact.added",
       projectId: request.params.projectId,
       payload: {
-        artifact,
-        artifactKind: path.extname(artifact.name).toLowerCase() === ".md" ? "markdown" : "file",
+        resource,
+        resourceKind,
+        artifact: resource,
+        artifactKind: resourceKind,
       },
     }, request.log)
   } catch (error) {
@@ -739,7 +742,7 @@ app.patch("/api/projects/:projectId/plan/toggle", withTaskErrorBoundary(updatePr
 app.delete("/api/projects/:projectId/tasks", withTaskErrorBoundary(deleteProjectTaskLegacy))
 app.delete("/api/projects/:projectId/plan", withTaskErrorBoundary(deleteProjectTaskLegacy))
 
-app.patch("/api/projects/:projectId/artifacts/readme", async (request, reply) => {
+app.patch("/api/projects/:projectId/resources/readme", async (request, reply) => {
   try {
     reply.send(await updateArtifactIndex(request.params.projectId, request.body ?? {}))
   } catch (error) {
@@ -747,7 +750,7 @@ app.patch("/api/projects/:projectId/artifacts/readme", async (request, reply) =>
   }
 })
 
-app.patch("/api/projects/:projectId/artifacts", async (request, reply) => {
+app.patch("/api/projects/:projectId/resources", async (request, reply) => {
   try {
     if (typeof request.body?.content === "string") {
       reply.send(
@@ -760,13 +763,13 @@ app.patch("/api/projects/:projectId/artifacts", async (request, reply) => {
       return
     }
 
-    reply.code(400).send({ error: "Artifact filenames are stable" })
+    reply.code(400).send({ error: "Resource filenames are stable" })
   } catch (error) {
     sendError(reply, error)
   }
 })
 
-app.patch("/api/projects/:projectId/artifacts/content", async (request, reply) => {
+app.patch("/api/projects/:projectId/resources/content", async (request, reply) => {
   try {
     reply.send(
       await updateMarkdownArtifact(
@@ -780,7 +783,7 @@ app.patch("/api/projects/:projectId/artifacts/content", async (request, reply) =
   }
 })
 
-app.patch("/api/projects/:projectId/artifacts/excalidraw", async (request, reply) => {
+app.patch("/api/projects/:projectId/resources/excalidraw", async (request, reply) => {
   try {
     reply.send(
       await updateExcalidrawArtifact(
@@ -794,7 +797,7 @@ app.patch("/api/projects/:projectId/artifacts/excalidraw", async (request, reply
   }
 })
 
-app.patch("/api/projects/:projectId/generated/content", async (request, reply) => {
+app.patch("/api/projects/:projectId/work/content", async (request, reply) => {
   try {
     reply.send(
       await updateGeneratedMarkdown(
@@ -808,7 +811,7 @@ app.patch("/api/projects/:projectId/generated/content", async (request, reply) =
   }
 })
 
-app.delete("/api/projects/:projectId/artifacts", async (request, reply) => {
+app.delete("/api/projects/:projectId/resources", async (request, reply) => {
   try {
     reply.send(await deleteArtifact(request.params.projectId, String(request.query.path ?? "")))
   } catch (error) {

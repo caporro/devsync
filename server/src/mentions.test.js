@@ -48,15 +48,15 @@ test("stores mention events in system log and unread state in data users", async
     before: "",
     projectId: "demo",
     source: "test",
-    target: "artifacts/spec.md",
-    targetType: "artifact",
+    target: "resources/spec.md",
+    targetType: "resource",
   })
 
   const inbox = await listMentionInbox({ email: "ada" })
 
   assert.equal(inbox.unreadCount, 1)
-  assert.equal(inbox.items[0].target, "artifacts/spec.md")
-  assert.equal(inbox.items[0].targetType, "artifact")
+  assert.equal(inbox.items[0].target, "resources/spec.md")
+  assert.equal(inbox.items[0].targetType, "resource")
   assert.equal(inbox.items[0].content, "@Ada")
 
   await markInboxRead({ email: "ada" }, { lastReadAt: "9999-01-01T00:00:00.000Z" })
@@ -76,8 +76,8 @@ test("unread count for mentions includes events beyond response limit", async ()
       before: "",
       projectId: `demo-${index}`,
       source: "test",
-      target: `artifacts/spec-${index}.md`,
-      targetType: "artifact",
+      target: `resources/spec-${index}.md`,
+      targetType: "resource",
     })
   }
 

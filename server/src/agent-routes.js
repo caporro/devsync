@@ -126,7 +126,10 @@ function markdownProjectFilePath(url) {
     .replace(/^(?:\.\/)+/, "")
     .replace(/^(?:\.\.\/)+/, "")
 
-  return /^(?:artifacts|generated|tasks)\//.test(normalized) ? normalized : null
+  if (normalized.startsWith("artifacts/")) return `resources/${normalized.slice("artifacts/".length)}`
+  if (normalized.startsWith("generated/")) return `work/${normalized.slice("generated/".length)}`
+
+  return /^(?:resources|work|tasks)\//.test(normalized) ? normalized : null
 }
 
 function markdownLinkUrl(value) {

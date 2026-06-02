@@ -40,8 +40,8 @@ function inboxStatePath(userId) {
 
 function targetTypeFromPath(target) {
   const value = String(target ?? "")
-  if (value.startsWith("artifacts/")) return "artifact"
-  if (value.startsWith("generated/")) return "generated"
+  if (value.startsWith("resources/") || value.startsWith("artifacts/")) return "resource"
+  if (value.startsWith("work/") || value.startsWith("generated/")) return "work"
   if (value.startsWith("tasks/")) return "task"
   if (value.startsWith("logs/")) return "activity"
   return "file"

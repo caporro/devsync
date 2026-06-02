@@ -16,7 +16,12 @@ function eventMatches(automation, event) {
   }
 
   const filter = automation.eventFilter ?? {}
-  if (filter.artifactKind && String(filter.artifactKind) !== String(event.payload?.artifactKind ?? "")) {
+  const resourceKind = event.payload?.resourceKind ?? event.payload?.artifactKind ?? ""
+  if (filter.resourceKind && String(filter.resourceKind) !== String(resourceKind)) {
+    return false
+  }
+
+  if (filter.artifactKind && String(filter.artifactKind) !== String(resourceKind)) {
     return false
   }
 

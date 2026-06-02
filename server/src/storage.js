@@ -1,5 +1,5 @@
 import "./env.js"
-import { createReadStream, createWriteStream } from "node:fs"
+import { createReadStream, createWriteStream, existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
@@ -9,10 +9,14 @@ import { appendSystemLogEvent } from "./system-log.js"
 const PROJECT_FILE = "project.json"
 const PLANNING_FILE = "vault-plan.json"
 const LEGACY_GANTT_FILE = "gantt.json"
-const PROJECT_DIRS = ["artifacts", "logs", "generated", "tasks", "roles", "automations"]
+const RESOURCES_DIR = "resources"
+const WORK_DIR = "work"
+const LEGACY_RESOURCES_DIR = "artifacts"
+const LEGACY_WORK_DIR = "generated"
+const PROJECT_DIRS = [RESOURCES_DIR, "logs", WORK_DIR, "tasks", "roles", "automations"]
 const LEGACY_ACTIVITY_LOG_FILE = "activity.md"
 const ACTIVITY_LOG_DIR = "activity"
-const ARTIFACTS_README_FILE = "readme.md"
+const RESOURCES_README_FILE = "readme.md"
 const TASKS_README_FILE = "README.md"
 const LEGACY_TASKS_README_FILE = "readme.md"
 const EXCALIDRAW_EXTENSION = ".excalidraw"
@@ -101,8 +105,8 @@ function activitySegmentPath(projectId, fileName) {
   return path.join(activityLogDirPath(projectId), fileName)
 }
 
-function artifactIndexPath(projectId) {
-  return path.join(projectPath(projectId), "artifacts", ARTIFACTS_README_FILE)
+function resourceIndexPath(projectId) {
+  return path.join(projectPath(projectId), RESOURCES_DIR, RESOURCES_README_FILE)
 }
 
 function taskIndexPath(projectId) {
@@ -114,7 +118,7 @@ function legacyTaskDirPath(projectId) {
 }
 
 function isArtifactIndexName(fileName) {
-  return String(fileName).toLowerCase() === ARTIFACTS_README_FILE
+  return String(fileName).toLowerCase() === RESOURCES_README_FILE
 }
 
 function isTaskIndexName(fileName) {
@@ -122,7 +126,7 @@ function isTaskIndexName(fileName) {
 }
 
 function isArtifactIndexPath(relativePath) {
-  return String(relativePath).split(path.sep).join("/").toLowerCase() === `artifacts/${ARTIFACTS_README_FILE}`
+  return String(relativePath).split(path.sep).join("/").toLowerCase() === `${RESOURCES_DIR}/${RESOURCES_README_FILE}`
 }
 
 function isTaskIndexPath(relativePath) {
@@ -166,9 +170,60 @@ function cleanFileName(input) {
     .slice(0, 140) || "file"
 }
 
-async function ensureProjectDirs(projectId) {
+function canonicalProjectRelativePath(relativePath) {
+  const normalized = String(relativePath ?? "").split("\\").join("/").replace(/^\/+/, "")
+
+  if (normalized.startsWith(`${LEGACY_RESOURCES_DIR}/`)) {
+    return `${RESOURCES_DIR}/${normalized.slice(LEGACY_RESOURCES_DIR.length + 1)}`
+  }
+
+  if (normalized.startsWith(`${LEGACY_WORK_DIR}/`)) {
+    return `${WORK_DIR}/${normalized.slice(LEGACY_WORK_DIR.length + 1)}`
+  }
+
+  return normalized
+}
+
+async function safeLegacyDir(projectId, dirName) {
+  const dir = path.join(projectPath(projectId), dirName)
+
+  try {
+    const stat = await fs.lstat(dir)
+
+    if (stat.isSymbolicLink()) {
+      throw storagePathError()
+    }
+
+    if (!stat.isDirectory()) {
+      throw Object.assign(new Error("Not a directory"), { statusCode: 400 })
+    }
+
+    await assertRealPathInside(vaultDir, dir)
+    return dir
+  } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
+}
+
+async function migrateLegacyProjectDir(projectId, legacyName, canonicalName) {
+  const legacyDir = await safeLegacyDir(projectId, legacyName)
+  if (!legacyDir) return
+
+  const canonicalDir = path.join(projectPath(projectId), canonicalName)
+  try {
+    await fs.lstat(canonicalDir)
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    await fs.rename(legacyDir, canonicalDir)
+  }
+}
+
+export async function ensureProjectDirs(projectId) {
   const root = projectPath(projectId)
   await ensureSafeDir(root)
+  await migrateLegacyProjectDir(projectId, LEGACY_RESOURCES_DIR, RESOURCES_DIR)
+  await migrateLegacyProjectDir(projectId, LEGACY_WORK_DIR, WORK_DIR)
   await migrateLegacyTaskDir(projectId)
   await Promise.all(PROJECT_DIRS.map((dir) => ensureSafeDir(path.join(root, dir))))
 }
@@ -444,14 +499,64 @@ function docRelative(docId, fullPath) {
 
 function resolveProjectFile(projectId, relativePath) {
   const root = projectPath(projectId)
-  const fullPath = path.resolve(root, relativePath)
+  const originalRelativePath = String(relativePath ?? "").split("\\").join("/")
+
+  if (path.isAbsolute(originalRelativePath)) {
+    throw Object.assign(new Error("Invalid file path"), { statusCode: 400 })
+  }
+
+  const normalizedRelativePath = canonicalProjectRelativePath(relativePath)
+  const fullPath = path.resolve(root, normalizedRelativePath)
   const relative = path.relative(root, fullPath)
 
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw Object.assign(new Error("Invalid file path"), { statusCode: 400 })
   }
 
+  const legacyDirName = legacyProjectDirName(normalizedRelativePath.split("/", 1)[0])
+  if (legacyDirName && !existsSync(fullPath)) {
+    const parts = normalizedRelativePath.split("/")
+    const legacyPath = path.resolve(root, legacyDirName, ...parts.slice(1))
+    const legacyRelative = path.relative(root, legacyPath)
+
+    if (!legacyRelative.startsWith("..") && !path.isAbsolute(legacyRelative) && existsSync(legacyPath)) {
+      return legacyPath
+    }
+  }
+
   return fullPath
+}
+
+function canonicalProjectDirName(dirName) {
+  if (dirName === LEGACY_RESOURCES_DIR) return RESOURCES_DIR
+  if (dirName === LEGACY_WORK_DIR) return WORK_DIR
+  return dirName
+}
+
+function legacyProjectDirName(dirName) {
+  if (dirName === RESOURCES_DIR) return LEGACY_RESOURCES_DIR
+  if (dirName === WORK_DIR) return LEGACY_WORK_DIR
+  return null
+}
+
+function projectDirCandidates(projectId, dirName) {
+  const canonicalDirName = canonicalProjectDirName(dirName)
+  const candidates = [
+    {
+      fullPath: path.join(projectPath(projectId), canonicalDirName),
+      publicDirName: canonicalDirName,
+    },
+  ]
+  const legacyDirName = legacyProjectDirName(canonicalDirName)
+
+  if (legacyDirName) {
+    candidates.push({
+      fullPath: path.join(projectPath(projectId), legacyDirName),
+      publicDirName: canonicalDirName,
+    })
+  }
+
+  return candidates
 }
 
 function resolveProjectSubdirFile(projectId, relativePath, subdirName, invalidMessage, isIndexPath) {
@@ -464,10 +569,10 @@ function resolveProjectSubdirFile(projectId, relativePath, subdirName, invalidMe
     throw Object.assign(new Error("Invalid file path encoding"), { statusCode: 400 })
   }
 
-  const normalizedInput = decodedPath.split("\\").join("/")
+  const originalInput = decodedPath.split("\\").join("/")
+  const normalizedInput = canonicalProjectRelativePath(originalInput)
   const prefixedPath = normalizedInput.includes("/") ? normalizedInput : `${subdirName}/${normalizedInput}`
   const normalizedPath = path.posix.normalize(prefixedPath)
-  const subdirRoot = path.join(projectPath(projectId), subdirName)
 
   if (
     normalizedPath === `${subdirName}` ||
@@ -478,14 +583,18 @@ function resolveProjectSubdirFile(projectId, relativePath, subdirName, invalidMe
     throw Object.assign(new Error(invalidMessage), { statusCode: 400 })
   }
 
-  if (path.isAbsolute(normalizedInput)) {
+  if (path.isAbsolute(originalInput)) {
     throw Object.assign(new Error(invalidMessage), { statusCode: 400 })
   }
 
   const fullPath = resolveProjectFile(projectId, normalizedPath)
-  const relative = path.relative(subdirRoot, fullPath)
+  const allowedRoots = projectDirCandidates(projectId, subdirName).map((candidate) => candidate.fullPath)
+  const isAllowedSubdirFile = allowedRoots.some((root) => {
+    const relative = path.relative(root, fullPath)
+    return relative !== "" && relative !== "." && !relative.startsWith("..") && !path.isAbsolute(relative)
+  })
 
-  if (relative === "" || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isAllowedSubdirFile) {
     throw Object.assign(new Error(invalidMessage), { statusCode: 400 })
   }
 
@@ -505,20 +614,32 @@ function resolveDocFile(docId, relativePath) {
 }
 
 async function listProjectFiles(projectId, dirName) {
-  const dir = path.join(projectPath(projectId), dirName)
+  const files = []
+  const usedPaths = new Set()
 
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true })
-    const files = await Promise.all(
+  for (const candidate of projectDirCandidates(projectId, dirName)) {
+    let entries
+
+    try {
+      entries = await fs.readdir(candidate.fullPath, { withFileTypes: true })
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        continue
+      }
+
+      throw error
+    }
+
+    const candidateFiles = await Promise.all(
       entries
         .filter((entry) => {
           if (!entry.isFile()) return false
-          if (dirName === "artifacts" && isArtifactIndexName(entry.name)) return false
+          if (canonicalProjectDirName(dirName) === RESOURCES_DIR && isArtifactIndexName(entry.name)) return false
           if (dirName === "tasks" && isTaskIndexName(entry.name)) return false
           return true
         })
         .map(async (entry) => {
-          const fullPath = path.join(dir, entry.name)
+          const fullPath = path.join(candidate.fullPath, entry.name)
           const stat = await fs.stat(fullPath)
           let title = null
           let owner = null
@@ -546,8 +667,8 @@ async function listProjectFiles(projectId, dirName) {
 
           return {
             name: entry.name,
-            path: projectRelative(projectId, fullPath),
-            kind: dirName,
+            path: `${candidate.publicDirName}/${entry.name}`,
+            kind: canonicalProjectDirName(dirName),
             size: stat.size,
             title,
             owner,
@@ -558,14 +679,17 @@ async function listProjectFiles(projectId, dirName) {
         })
     )
 
-    return files.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return []
-    }
+    for (const file of candidateFiles) {
+      if (usedPaths.has(file.path)) {
+        continue
+      }
 
-    throw error
+      usedPaths.add(file.path)
+      files.push(file)
+    }
   }
+
+  return files.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
 async function listDocFiles(docId) {
@@ -820,7 +944,7 @@ async function readTaskIndexItems(projectId) {
 
 async function readArtifactIndexItems(projectId) {
   try {
-    return parseIndexItems(await safeReadTextFile(artifactIndexPath(projectId)), "artifacts", ARTIFACTS_README_FILE)
+    return parseIndexItems(await safeReadTextFile(resourceIndexPath(projectId)), RESOURCES_DIR, RESOURCES_README_FILE)
   } catch (error) {
     if (error.code === "ENOENT") {
       return []
@@ -833,20 +957,20 @@ async function readArtifactIndexItems(projectId) {
 export async function ensureArtifactIndex(projectId) {
   await ensureProjectDirs(projectId)
 
-  const files = await listProjectFiles(projectId, "artifacts")
+  const files = await listProjectFiles(projectId, RESOURCES_DIR)
   const content = buildIndexContent({
-    title: "Artifacts",
+    title: "Resources",
     files,
     preferredItems: await readArtifactIndexItems(projectId),
-    dirName: "artifacts",
-    readmeName: ARTIFACTS_README_FILE,
+    dirName: RESOURCES_DIR,
+    readmeName: RESOURCES_README_FILE,
   })
-  const target = artifactIndexPath(projectId)
+  const target = resourceIndexPath(projectId)
 
   try {
     if ((await safeReadTextFile(target)) === content) {
       return {
-        path: `artifacts/${ARTIFACTS_README_FILE}`,
+        path: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
         content,
       }
     }
@@ -859,7 +983,7 @@ export async function ensureArtifactIndex(projectId) {
   await safeWriteTextFile(target, content)
 
   return {
-    path: `artifacts/${ARTIFACTS_README_FILE}`,
+    path: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
     content,
   }
 }
@@ -1020,8 +1144,8 @@ function activityFileContent(entries) {
 }
 
 function extractActivityArtifactPath(content) {
-  const match = String(content).match(/\]\((?:\.\.\/)?(artifacts\/[^)#]+)(?:#[^)]+)?\)/)
-  return match ? match[1] : null
+  const match = String(content).match(/\]\((?:\.\.\/)?((?:resources|artifacts)\/[^)#]+)(?:#[^)]+)?\)/)
+  return match ? canonicalProjectRelativePath(match[1]) : null
 }
 
 async function listActivitySegmentFiles(projectId) {
@@ -1435,9 +1559,9 @@ export async function listProjects() {
     try {
       const metadata = await getProjectMetadata(entry.name)
       await ensureTaskIndex(entry.name)
-      const [artifacts, generated, tasks, activity] = await Promise.all([
-        listProjectFiles(entry.name, "artifacts"),
-        listProjectFiles(entry.name, "generated"),
+      const [resources, work, tasks, activity] = await Promise.all([
+        listProjectFiles(entry.name, RESOURCES_DIR),
+        listProjectFiles(entry.name, WORK_DIR),
         listProjectFiles(entry.name, "tasks"),
         getActivityLog(entry.name),
       ])
@@ -1445,9 +1569,9 @@ export async function listProjects() {
       projects.push({
         ...metadata,
         counts: {
-          artifacts: artifacts.length,
+          resources: resources.length,
           logs: activity.entries.length,
-          generated: generated.length,
+          work: work.length,
           tasks: tasks.length,
         },
       })
@@ -1572,11 +1696,11 @@ export async function getProject(projectId, options = {}) {
   await ensureActivityLog(projectId)
   await ensureArtifactIndex(projectId)
   await ensureTaskIndex(projectId)
-  const [metadata, artifacts, logs, generated, tasks, activity] = await Promise.all([
+  const [metadata, resources, logs, work, tasks, activity] = await Promise.all([
     getProjectMetadata(projectId),
-    listProjectFiles(projectId, "artifacts"),
+    listProjectFiles(projectId, RESOURCES_DIR),
     listProjectFiles(projectId, "logs"),
-    listProjectFiles(projectId, "generated"),
+    listProjectFiles(projectId, WORK_DIR),
     listProjectFiles(projectId, "tasks"),
     getActivityLog(projectId, { files: options.activityFiles }),
   ])
@@ -1585,15 +1709,15 @@ export async function getProject(projectId, options = {}) {
     ...metadata,
     activity,
     files: {
-      artifacts,
+      resources,
       logs,
-      generated,
+      work,
       tasks,
     },
     counts: {
-      artifacts: artifacts.length,
+      resources: resources.length,
       logs: activity.entries.length,
-      generated: generated.length,
+      work: work.length,
       tasks: tasks.length,
     },
   }
@@ -1610,7 +1734,7 @@ export async function addTextArtifact(projectId, input) {
     throw Object.assign(new Error("Content is required"), { statusCode: 400 })
   }
 
-  const dir = path.join(projectPath(projectId), "artifacts")
+  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
   const document = markdownDocument(title, content, {
     type: "text",
@@ -1626,7 +1750,7 @@ export async function addTextArtifact(projectId, input) {
     kind: "artifact",
     artifactPath: relativePath,
     title: `Added ${title}`,
-    content: `Added artifact [${markdownLinkLabel(title)}](../${relativePath}).`,
+    content: `Added resource [${markdownLinkLabel(title)}](../${relativePath}).`,
   })
   await ensureArtifactIndex(projectId)
   await touchProject(projectId)
@@ -1636,7 +1760,7 @@ export async function addTextArtifact(projectId, input) {
     actor: creator,
     projectId,
     target: relativePath,
-    summary: `Added text artifact ${title}`,
+    summary: `Added text resource ${title}`,
   })
   await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "artifact")
 
@@ -1659,7 +1783,7 @@ export async function addLinkArtifact(projectId, input) {
   const created = nowIso()
   const creator = String(input?.author ?? input?.creator ?? "team").trim() || "team"
   const body = [`Source: ${url}`, notes ? `\n${notes}` : ""].join("\n")
-  const dir = path.join(projectPath(projectId), "artifacts")
+  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
   const document = markdownDocument(title, body, {
     type: "link",
@@ -1677,7 +1801,7 @@ export async function addLinkArtifact(projectId, input) {
     kind: "artifact",
     artifactPath: relativePath,
     title: `Added ${title}`,
-    content: `Added artifact [${markdownLinkLabel(title)}](../${relativePath}).`,
+    content: `Added resource [${markdownLinkLabel(title)}](../${relativePath}).`,
   })
   await ensureArtifactIndex(projectId)
   await touchProject(projectId)
@@ -1687,7 +1811,7 @@ export async function addLinkArtifact(projectId, input) {
     actor: creator,
     projectId,
     target: relativePath,
-    summary: `Added link artifact ${title}`,
+    summary: `Added link resource ${title}`,
     metadata: { sourceUrl: url },
   })
   await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "artifact")
@@ -1756,7 +1880,7 @@ export async function addExcalidrawArtifact(projectId, input = {}) {
   const created = nowIso()
   const creator = String(input?.author ?? input?.creator ?? "team").trim() || "team"
   const content = normalizeExcalidrawContent(input?.content, title)
-  const dir = path.join(projectPath(projectId), "artifacts")
+  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
   const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}${EXCALIDRAW_EXTENSION}`)
 
   await safeWriteTextFile(target, content)
@@ -1777,7 +1901,7 @@ export async function addExcalidrawArtifact(projectId, input = {}) {
     actor: creator,
     projectId,
     target: relativePath,
-    summary: `Added Excalidraw artifact ${title}`,
+    summary: `Added Excalidraw resource ${title}`,
   })
 
   return {
@@ -2009,22 +2133,22 @@ export async function updateTaskIndex(projectId, input = {}) {
 export async function updateArtifactIndex(projectId, input = {}) {
   await ensureProjectDirs(projectId)
 
-  const files = await listProjectFiles(projectId, "artifacts")
+  const files = await listProjectFiles(projectId, RESOURCES_DIR)
   const requestedItems = Array.isArray(input.items)
     ? input.items.map((item) => ({
-        path: normalizeIndexPath(item?.path, "artifacts", ARTIFACTS_README_FILE),
+        path: normalizeIndexPath(canonicalProjectRelativePath(item?.path), RESOURCES_DIR, RESOURCES_README_FILE),
       }))
     : typeof input.content === "string"
-      ? parseIndexItems(input.content, "artifacts", ARTIFACTS_README_FILE)
+      ? parseIndexItems(input.content, RESOURCES_DIR, RESOURCES_README_FILE)
       : await readArtifactIndexItems(projectId)
   const content = buildIndexContent({
-    title: "Artifacts",
+    title: "Resources",
     files,
     preferredItems: requestedItems,
-    dirName: "artifacts",
-    readmeName: ARTIFACTS_README_FILE,
+    dirName: RESOURCES_DIR,
+    readmeName: RESOURCES_README_FILE,
   })
-  const target = artifactIndexPath(projectId)
+  const target = resourceIndexPath(projectId)
   const existingRaw = await safeReadTextFile(target).catch((error) => {
     if (error.code === "ENOENT") return ""
     throw error
@@ -2033,17 +2157,17 @@ export async function updateArtifactIndex(projectId, input = {}) {
   await safeWriteTextFile(target, content)
   await touchProject(projectId)
   await appendSystemLogEvent({
-    action: "artifact_index.updated",
+    action: "resource_index.updated",
     source: input?.source ?? "storage",
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
-    target: `artifacts/${ARTIFACTS_README_FILE}`,
-    summary: "Updated artifact index",
+    target: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
+    summary: "Updated resource index",
   })
-  await appendMentionEventsForWrite(projectId, `artifacts/${ARTIFACTS_README_FILE}`, existingRaw, content, input, "artifact")
+  await appendMentionEventsForWrite(projectId, `${RESOURCES_DIR}/${RESOURCES_README_FILE}`, existingRaw, content, input, "resource")
 
   return {
-    path: `artifacts/${ARTIFACTS_README_FILE}`,
+    path: `${RESOURCES_DIR}/${RESOURCES_README_FILE}`,
     size: Buffer.byteLength(content, "utf8"),
     content,
   }
@@ -2066,7 +2190,7 @@ export async function addLog(projectId, input) {
   let logContent = content
 
   if (content.length > ACTIVITY_INLINE_MAX_CHARS) {
-    const dir = path.join(projectPath(projectId), "artifacts")
+    const dir = path.join(projectPath(projectId), RESOURCES_DIR)
     const target = await uniquePath(dir, `${dateStamp(new Date(createdAt))}-${slugify(title)}.md`)
     const document = markdownDocument(title, content, {
       type: "activity-log",
@@ -2119,7 +2243,7 @@ export async function saveUpload(projectId, filePart, input = {}) {
     throw Object.assign(new Error("File is required"), { statusCode: 400 })
   }
 
-  const dir = path.join(projectPath(projectId), "artifacts")
+  const dir = path.join(projectPath(projectId), RESOURCES_DIR)
   const target = await uniquePath(dir, cleanFileName(filePart.filename))
   await safeUploadStream(target, filePart.file)
   const relativePath = projectRelative(projectId, target)
@@ -2128,7 +2252,7 @@ export async function saveUpload(projectId, filePart, input = {}) {
     kind: "artifact",
     artifactPath: relativePath,
     title: `Uploaded ${path.basename(target)}`,
-    content: `Uploaded artifact [${path.basename(target)}](../${relativePath}).`,
+    content: `Uploaded resource [${path.basename(target)}](../${relativePath}).`,
   })
   await ensureArtifactIndex(projectId)
   await touchProject(projectId)
@@ -2138,7 +2262,7 @@ export async function saveUpload(projectId, filePart, input = {}) {
     actor: input.author ?? "team",
     projectId,
     target: relativePath,
-    summary: `Uploaded artifact ${path.basename(target)}`,
+    summary: `Uploaded resource ${path.basename(target)}`,
   })
 
   return {
@@ -2148,7 +2272,7 @@ export async function saveUpload(projectId, filePart, input = {}) {
 }
 
 function resolveArtifactFile(projectId, relativePath) {
-  return resolveProjectSubdirFile(projectId, relativePath, "artifacts", "Only artifact files can be changed", isArtifactIndexPath)
+  return resolveProjectSubdirFile(projectId, relativePath, RESOURCES_DIR, "Only resource files can be changed", isArtifactIndexPath)
 }
 
 function resolveTaskFile(projectId, relativePath) {
@@ -2156,7 +2280,7 @@ function resolveTaskFile(projectId, relativePath) {
 }
 
 function resolveGeneratedFile(projectId, relativePath) {
-  return resolveProjectSubdirFile(projectId, relativePath, "generated", "Only generated files can be changed")
+  return resolveProjectSubdirFile(projectId, relativePath, WORK_DIR, "Only work files can be changed")
 }
 
 export async function deleteArtifact(projectId, relativePath) {
@@ -2171,7 +2295,7 @@ export async function deleteArtifact(projectId, relativePath) {
     actor: "team",
     projectId,
     target: projectRelative(projectId, fullPath),
-    summary: `Deleted artifact ${path.basename(fullPath)}`,
+    summary: `Deleted resource ${path.basename(fullPath)}`,
   })
 
   return {
@@ -2232,7 +2356,7 @@ export async function renameArtifact(projectId, relativePath, input = {}) {
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: projectRelative(projectId, target),
-    summary: `Renamed artifact to ${title}`,
+    summary: `Renamed resource to ${title}`,
     metadata: { previousPath: projectRelative(projectId, fullPath) },
   })
 
@@ -2245,7 +2369,7 @@ export async function renameArtifact(projectId, relativePath, input = {}) {
 export async function updateMarkdownArtifact(projectId, relativePath, input = {}) {
   await ensureProjectDirs(projectId)
   const fullPath = resolveArtifactFile(projectId, relativePath)
-  const saved = await updateMarkdownProjectFile(projectId, fullPath, input, "artifacts")
+  const saved = await updateMarkdownProjectFile(projectId, fullPath, input, "resources")
   await ensureArtifactIndex(projectId)
   await appendSystemLogEvent({
     action: "artifact.updated",
@@ -2253,7 +2377,7 @@ export async function updateMarkdownArtifact(projectId, relativePath, input = {}
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: saved.path,
-    summary: `Updated artifact ${path.basename(saved.path)}`,
+    summary: `Updated resource ${path.basename(saved.path)}`,
   })
   return saved
 }
@@ -2264,7 +2388,7 @@ export async function updateExcalidrawArtifact(projectId, relativePath, input = 
   await assertSafeExistingFile(vaultDir, fullPath)
 
   if (!isExcalidrawName(fullPath)) {
-    throw Object.assign(new Error("Only Excalidraw artifacts can be edited"), { statusCode: 400 })
+    throw Object.assign(new Error("Only Excalidraw resources can be edited"), { statusCode: 400 })
   }
 
   if (typeof input.content !== "string") {
@@ -2281,7 +2405,7 @@ export async function updateExcalidrawArtifact(projectId, relativePath, input = 
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: projectRelative(projectId, fullPath),
-    summary: `Updated Excalidraw artifact ${path.basename(fullPath)}`,
+    summary: `Updated Excalidraw resource ${path.basename(fullPath)}`,
   })
 
   return {
@@ -2294,14 +2418,14 @@ export async function updateExcalidrawArtifact(projectId, relativePath, input = 
 export async function updateGeneratedMarkdown(projectId, relativePath, input = {}) {
   await ensureProjectDirs(projectId)
   const fullPath = resolveGeneratedFile(projectId, relativePath)
-  const saved = await updateMarkdownProjectFile(projectId, fullPath, input, "generated files")
+  const saved = await updateMarkdownProjectFile(projectId, fullPath, input, "work files")
   await appendSystemLogEvent({
-    action: "generated.updated",
+    action: "work.updated",
     source: input?.source ?? "storage",
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: saved.path,
-    summary: `Updated generated file ${path.basename(saved.path)}`,
+    summary: `Updated work file ${path.basename(saved.path)}`,
   })
   return saved
 }
@@ -2465,19 +2589,21 @@ export async function toggleTask(projectId, relativePath, done) {
 }
 
 export async function readProjectFile(projectId, relativePath) {
-  if (isArtifactIndexPath(relativePath)) {
+  const normalizedPath = canonicalProjectRelativePath(relativePath)
+
+  if (isArtifactIndexPath(normalizedPath)) {
     await ensureArtifactIndex(projectId)
   }
 
-  if (isTaskIndexPath(relativePath)) {
+  if (isTaskIndexPath(normalizedPath)) {
     await ensureTaskIndex(projectId)
   }
 
-  const fullPath = resolveProjectFile(projectId, relativePath)
+  const fullPath = resolveProjectFile(projectId, normalizedPath)
   await assertSafeExistingFile(vaultDir, fullPath)
 
   return {
-    path: projectRelative(projectId, fullPath),
+    path: canonicalProjectRelativePath(projectRelative(projectId, fullPath)),
     content: await safeReadTextFile(fullPath),
   }
 }
@@ -2492,7 +2618,7 @@ export async function readProjectFileBuffer(projectId, relativePath) {
 
   return {
     name: path.basename(fullPath),
-    path: projectRelative(projectId, fullPath),
+    path: canonicalProjectRelativePath(projectRelative(projectId, fullPath)),
     buffer: await safeReadBuffer(fullPath),
     size: stat.size,
   }
@@ -2559,7 +2685,7 @@ export async function searchFiles({ projectId, query }) {
 
   for (const project of projects) {
     const detail = project.files ? project : await getProject(project.id)
-    const files = [...detail.files.artifacts, ...detail.files.logs, ...detail.files.generated, ...(detail.files.tasks ?? [])]
+    const files = [...detail.files.resources, ...detail.files.logs, ...detail.files.work, ...(detail.files.tasks ?? [])]
 
     for (const file of files) {
       const nameMatches = file.name.toLowerCase().includes(needle)

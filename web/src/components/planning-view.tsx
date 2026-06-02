@@ -331,19 +331,21 @@ function planningInternalLink(value: string, row: ITask) {
 
   normalized = normalized.replace(/^\/+/, "").replace(/^(?:\.\/)+/, "")
 
-  const routed = normalized.match(/^projects\/([^/]+)\/(artifacts|generated|tasks)\/(.+)$/)
+  const routed = normalized.match(/^projects\/([^/]+)\/(resources|artifacts|work|generated|tasks)\/(.+)$/)
   if (routed) {
-    const [, projectId, section, path] = routed
+    const [, projectId, rawSection, path] = routed
+    const section = rawSection === "artifacts" ? "resources" : rawSection === "generated" ? "work" : rawSection
     const routePath = encodePlanningRoutePath(path, section)
     return routePath && validPlanningProjectId(projectId)
       ? { href: `/projects/${encodeURIComponent(projectId)}/${section}/${routePath}`, path: `${section}/${path}`, projectId, type: "internal" as const }
       : null
   }
 
-  const relative = normalized.match(/^(artifacts|generated|tasks)\/(.+)$/)
+  const relative = normalized.match(/^(resources|artifacts|work|generated|tasks)\/(.+)$/)
   const projectId = validPlanningProjectId(row.projectId)
   if (relative && projectId) {
-    const [, section, path] = relative
+    const [, rawSection, path] = relative
+    const section = rawSection === "artifacts" ? "resources" : rawSection === "generated" ? "work" : rawSection
     const routePath = encodePlanningRoutePath(path, section)
     return routePath
       ? { href: `/projects/${encodeURIComponent(projectId)}/${section}/${routePath}`, path: `${section}/${path}`, projectId, type: "internal" as const }

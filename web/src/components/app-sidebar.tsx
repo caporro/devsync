@@ -70,7 +70,7 @@ export function AppSidebar({
   isLoading?: boolean
   isDocsLoading?: boolean
   isCreateDisabled?: boolean
-  activeView?: "activity" | "artifacts" | "generated" | "tasks" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "readme" | string
+  activeView?: "activity" | "resources" | "work" | "tasks" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "readme" | string
   onCreateThread?: () => void
   onDocSelect?: (docId: string) => void
   onOpenGit?: () => void

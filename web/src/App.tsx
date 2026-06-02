@@ -162,7 +162,7 @@ import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThrea
 const EMPTY_PROJECTS: ProjectSummary[] = []
 const EMPTY_DOCS: DocsSummary[] = []
 const EMPTY_FILES: ProjectFile[] = []
-const ARTIFACT_INDEX_PATH = "artifacts/readme.md"
+const ARTIFACT_INDEX_PATH = "resources/readme.md"
 const TASK_INDEX_PATH = "tasks/README.md"
 const CHAT_MAX_WIDTH = "max-w-[760px]"
 const CHAT_THREAD_MENU_VALUE = "threads"
@@ -227,7 +227,10 @@ function markdownProjectFilePath(url: string) {
     .replace(/^(?:\.\/)+/, "")
     .replace(/^(?:\.\.\/)+/, "")
 
-  return /^(?:artifacts|generated|tasks)\//.test(normalized) ? normalized : null
+  if (normalized.startsWith("artifacts/")) return `resources/${normalized.slice("artifacts/".length)}`
+  if (normalized.startsWith("generated/")) return `work/${normalized.slice("generated/".length)}`
+
+  return /^(?:resources|work|tasks)\//.test(normalized) ? normalized : null
 }
 
 function markdownUserMentionId(url: string) {
@@ -367,8 +370,8 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     const projectId = decodePathPart(parts[1])
     const section = parts[2] ?? "activity"
 
-    if (section === "artifacts") {
-      const artifactPath = scopedRouteFilePath("artifacts", parts.slice(3))
+    if (section === "resources" || section === "artifacts") {
+      const artifactPath = scopedRouteFilePath("resources", parts.slice(3))
       return { ...emptyRoute(artifactPath ? "artifact" : "artifacts"), projectId, artifactPath }
     }
 
@@ -394,8 +397,8 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
       return { ...emptyRoute("config"), projectId }
     }
 
-    if (section === "generated") {
-      const generatedPath = scopedRouteFilePath("generated", parts.slice(3))
+    if (section === "work" || section === "generated") {
+      const generatedPath = scopedRouteFilePath("work", parts.slice(3))
       if (generatedPath) {
         return { ...emptyRoute("generated-file"), projectId, generatedPath }
       }
@@ -403,7 +406,7 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
       return {
         ...emptyRoute("placeholder"),
         projectId,
-        placeholderTitle: "generated",
+        placeholderTitle: "work",
       }
     }
 
@@ -506,19 +509,19 @@ function buildAppPath(route: AppRoute) {
   const base = `/projects/${encodePathPart(route.projectId)}`
 
   if (route.mainView === "artifacts") {
-    return `${base}/artifacts`
+    return `${base}/resources`
   }
 
   if (route.mainView === "artifact") {
     return route.artifactPath
-      ? `${base}/artifacts/${routeFilePathParts(route.artifactPath, "artifacts")}`
-      : `${base}/artifacts`
+      ? `${base}/resources/${routeFilePathParts(route.artifactPath, "resources")}`
+      : `${base}/resources`
   }
 
   if (route.mainView === "generated-file") {
     return route.generatedPath
-      ? `${base}/generated/${routeFilePathParts(route.generatedPath, "generated")}`
-      : `${base}/generated`
+      ? `${base}/work/${routeFilePathParts(route.generatedPath, "work")}`
+      : `${base}/work`
   }
 
   if (route.mainView === "tasks") {
@@ -544,9 +547,9 @@ function buildAppPath(route: AppRoute) {
   }
 
   if (route.mainView === "placeholder") {
-    return route.placeholderTitle && route.placeholderTitle !== "generated"
-      ? `${base}/generated/${encodePathPart(route.placeholderTitle)}`
-      : `${base}/generated`
+    return route.placeholderTitle && route.placeholderTitle !== "work"
+      ? `${base}/work/${encodePathPart(route.placeholderTitle)}`
+      : `${base}/work`
   }
 
   return `${base}/activity`
@@ -1403,7 +1406,7 @@ function ChatAttachments({
                   onSelect={() => onAddToArtifacts(attachment, threadId)}
                 >
                   <HugeiconsIcon icon={FileLinkIcon} strokeWidth={2} />
-                  Add to artifacts
+                  Add to resources
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1455,8 +1458,8 @@ function activityActorClass(value: string) {
 }
 
 function artifactPathFromActivityHref(href: string) {
-  const path = href.replace(/^\.?\//, "").replace(/^\.\.\//, "")
-  return path.startsWith("artifacts/") ? path : null
+  const path = markdownProjectFilePath(href)
+  return path?.startsWith("resources/") ? path : null
 }
 
 function renderActivityContent(content: string, onOpenArtifact: (path: string) => void) {
@@ -1658,7 +1661,7 @@ function ProjectRail({
       </section>
 
       <section className="mt-6 space-y-2">
-        <div className="px-2 text-sm font-semibold text-muted-foreground">Generated</div>
+        <div className="px-2 text-sm font-semibold text-muted-foreground">Work</div>
         <div className="space-y-1">
           {generatedFiles.length === 0 ? (
             <div className="px-2 py-1 text-xs text-muted-foreground">Empty</div>
@@ -1695,7 +1698,7 @@ function ProjectRail({
             onClick={onOpenArtifacts}
             type="button"
           >
-            Artifacts
+            Resources
           </button>
           <div className="flex items-center gap-1">
             <button
@@ -1709,7 +1712,7 @@ function ProjectRail({
             <button
               className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={onAddArtifact}
-              title="Add artifact"
+              title="Add resource"
               type="button"
             >
               <HugeiconsIcon icon={AddCircleIcon} strokeWidth={2} className="size-4" />
@@ -2168,7 +2171,7 @@ function AssistantChatView({
                               type="button"
                             >
                               <HugeiconsIcon className="size-3.5" icon={FileLinkIcon} strokeWidth={2} />
-                              Add to artifacts
+                              Add to resources
                             </button>
                           ) : null}
                         </div>
@@ -3216,7 +3219,7 @@ function ArtifactDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add artifact</DialogTitle>
+          <DialogTitle>Add resource</DialogTitle>
           <DialogDescription>Upload a file or paste markdown text.</DialogDescription>
         </DialogHeader>
 
@@ -3251,7 +3254,7 @@ function ArtifactDialog({
               Cancel
             </Button>
             <Button disabled={!canSubmit} type="submit">
-              Save artifact
+              Save resource
             </Button>
           </DialogFooter>
         </form>
@@ -4391,7 +4394,7 @@ function WorkspaceApp({
       )
       await refresh(selectedProjectId)
       await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] })
-    }, { successMessage: "Added to artifacts" })
+    }, { successMessage: "Added to resources" })
   }
 
   async function handleAgentMessageAddToArtifacts(message: AgentMessage) {
@@ -4413,7 +4416,7 @@ function WorkspaceApp({
       })
       await refresh(selectedProjectId)
       await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, ARTIFACT_INDEX_PATH] })
-    }, { successMessage: "Added to artifacts" })
+    }, { successMessage: "Added to resources" })
   }
 
   const connectAgentRunStream = useCallback(({
@@ -5090,8 +5093,8 @@ function WorkspaceApp({
   const selectedAssistantThoughts = selectedAgentThreadId
     ? assistantThoughtsByThread[selectedAgentThreadId] ?? []
     : []
-  const artifacts = projectQuery.data?.files.artifacts ?? EMPTY_FILES
-  const generated = projectQuery.data?.files.generated ?? EMPTY_FILES
+  const artifacts = projectQuery.data?.files.resources ?? EMPTY_FILES
+  const generated = projectQuery.data?.files.work ?? EMPTY_FILES
   const tasks = projectQuery.data?.files.tasks ?? EMPTY_FILES
   const markdownCommandFiles = useMemo(() => {
     const seen = new Set<string>()
@@ -5221,7 +5224,7 @@ function WorkspaceApp({
       return
     }
 
-    if (normalized.startsWith("artifacts/")) {
+    if (normalized.startsWith("resources/")) {
       guardedNavigation(() => {
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(normalized)
@@ -5233,7 +5236,7 @@ function WorkspaceApp({
       return
     }
 
-    if (normalized.startsWith("generated/")) {
+    if (normalized.startsWith("work/")) {
       guardedNavigation(() => {
         setSelectedProjectId(targetProjectId)
         setSelectedArtifactPath(null)
@@ -5656,8 +5659,8 @@ function WorkspaceApp({
         {immersiveViewActive ? null : (
         <AppSidebar
           activeView={
-            mainView === "generated-file" || (mainView === "placeholder" && placeholderTitle === "generated")
-            ? "generated"
+            mainView === "generated-file" || (mainView === "placeholder" && placeholderTitle === "work")
+            ? "work"
             : mainView === "task"
               ? "tasks"
               : mainView
@@ -6190,7 +6193,7 @@ function WorkspaceApp({
                       indexPath={ARTIFACT_INDEX_PATH}
                       isLoading={artifactIndexQuery.isLoading}
                       isSaving={busyAction === "artifact-index"}
-                      title="Artifacts"
+                      title="Resources"
                       onAdd={() => guardedNavigation(() => setArtifactDialogOpen(true))}
                       onCreateDrawing={handleRequestCreateDrawing}
                       onOpenFile={(path) => {

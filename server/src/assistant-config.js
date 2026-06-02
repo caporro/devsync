@@ -15,7 +15,7 @@ export const ASSISTANT_ID = "assistant"
 
 export const BASE_ASSISTANT_PROMPT = [
   "You are the main Devsync Assistant.",
-  "Devsync is filesystem-first project memory for team documentation, artifacts and activity logs.",
+  "Devsync is filesystem-first project memory for team documentation, resources, work and activity logs.",
   "There is only one Assistant. Roles are temporary prompt specializations, not separate agents.",
   "Keep answers practical, concise and grounded in the available project files.",
   "Do not modify files unless the user clearly asks for that action.",
@@ -120,13 +120,22 @@ function normalizeAssistantTools(data) {
   return hasFrontmatterKey(data, "tools") ? normalizeList(data.tools) : []
 }
 
+function normalizeProjectAccessPaths(items) {
+  return items.map((item) => {
+    const value = String(item)
+    if (value === "artifacts" || value.startsWith("artifacts/")) return `resources${value.slice("artifacts".length)}`
+    if (value === "generated" || value.startsWith("generated/")) return `work${value.slice("generated".length)}`
+    return value
+  })
+}
+
 function normalizeAssistantAccess(data, key, legacyKey) {
   if (hasFrontmatterKey(data, key)) {
-    return normalizeList(data[key])
+    return normalizeProjectAccessPaths(normalizeList(data[key]))
   }
 
   if (hasFrontmatterKey(data, legacyKey)) {
-    return normalizeList(data[legacyKey])
+    return normalizeProjectAccessPaths(normalizeList(data[legacyKey]))
   }
 
   return null
@@ -154,7 +163,7 @@ function normalizeAssistantConfig() {
     model: String(model).trim(),
     tools: ["filesystem"],
     read: ["**/*"],
-    write: ["tasks/**", "artifacts/**", "generated/**", "automations/**"],
+    write: ["tasks/**", "resources/**", "work/**", "automations/**"],
   }
 }
 

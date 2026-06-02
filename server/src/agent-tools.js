@@ -10,6 +10,7 @@ import {
   createTask,
   dataDir,
   deleteTask,
+  ensureProjectDirs,
   listTasks,
   readTask,
   slugify,
@@ -147,9 +148,9 @@ async function sendSesEmail(input) {
 }
 
 function safeGeneratedPath(projectId, wantedPath) {
-  const fileName = path.basename(String(wantedPath || "generated.md"))
+  const fileName = path.basename(String(wantedPath || "work.md"))
   const cleanName = slugify(fileName.replace(/\.md$/i, "")) + ".md"
-  const root = path.join(dataDir, projectId, "generated")
+  const root = path.join(dataDir, projectId, "work")
   const target = path.resolve(root, cleanName)
   const relative = path.relative(root, target)
 
@@ -157,7 +158,7 @@ function safeGeneratedPath(projectId, wantedPath) {
     throw Object.assign(new Error("Invalid generated file path"), { statusCode: 400 })
   }
 
-  return { root, target, relative: `generated/${cleanName}` }
+  return { root, target, relative: `work/${cleanName}` }
 }
 
 async function uniqueGeneratedPath(projectId, wantedPath) {
@@ -172,7 +173,7 @@ async function uniqueGeneratedPath(projectId, wantedPath) {
       await fs.access(target)
       const fileName = `${parsed.name}-${index}${parsed.ext}`
       target = path.join(parsed.dir, fileName)
-      relative = `generated/${fileName}`
+      relative = `work/${fileName}`
       index += 1
     } catch {
       return { root: initial.root, target, relative }
@@ -181,7 +182,10 @@ async function uniqueGeneratedPath(projectId, wantedPath) {
 }
 
 function cleanVirtualPath(value) {
-  return String(value ?? "").trim().replace(/^\/+/, "").replace(/^\.?\//, "")
+  const normalized = String(value ?? "").trim().replace(/^\/+/, "").replace(/^\.?\//, "")
+  if (normalized === "artifacts" || normalized.startsWith("artifacts/")) return `resources${normalized.slice("artifacts".length)}`
+  if (normalized === "generated" || normalized.startsWith("generated/")) return `work${normalized.slice("generated".length)}`
+  return normalized
 }
 
 function canWritePath(scope, targetPath) {
@@ -221,6 +225,7 @@ function createSaveGeneratedMarkdownTool(scope) {
         throw new Error("save_generated_markdown requires a project scope.")
       }
 
+      await ensureProjectDirs(scope.projectId)
       const { root, target, relative } = await uniqueGeneratedPath(scope.projectId, fileName || title)
       assertWritePath(scope, "save_generated_markdown", relative)
       const markdown = `${String(content).trim()}\n`
@@ -241,17 +246,17 @@ function createSaveGeneratedMarkdownTool(scope) {
         projectId: scope.projectId,
         source: "agent-tool",
         target: relative,
-        targetType: "generated",
+        targetType: "work",
       })
 
       return {
         path: relative,
-        message: "Generated markdown saved.",
+        message: "Work markdown saved.",
       }
     },
     {
       name: "save_generated_markdown",
-      description: "Save a generated Markdown file under the current project's generated/ folder.",
+      description: "Save a generated Markdown file under the current project's work/ folder.",
       schema: z.object({
         fileName: z.string().min(1).describe("Markdown file name, without directories."),
         title: z.string().optional().describe("Short title for the generated file."),
@@ -268,7 +273,7 @@ function createAppendActivityLogTool(scope) {
       assertWritePath(scope, "append_activity_log", "logs/activity/000001.md")
 
       if (text.trim().length > ACTIVITY_INLINE_MAX_CHARS) {
-        assertWritePath(scope, "append_activity_log", "artifacts/activity-log.md")
+        assertWritePath(scope, "append_activity_log", "resources/activity-log.md")
       }
 
       return addLog(scope.projectId, {

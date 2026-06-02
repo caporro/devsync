@@ -21,15 +21,22 @@ function normalizeTools(data) {
 }
 
 function normalizeAccess(data, key, legacyKey, fallback) {
+  const normalizeProjectAccessPaths = (items) => items.map((item) => {
+    const value = String(item)
+    if (value === "artifacts" || value.startsWith("artifacts/")) return `resources${value.slice("artifacts".length)}`
+    if (value === "generated" || value.startsWith("generated/")) return `work${value.slice("generated".length)}`
+    return value
+  })
+
   if (hasFrontmatterKey(data, key)) {
-    return normalizeList(data[key])
+    return normalizeProjectAccessPaths(normalizeList(data[key]))
   }
 
   if (hasFrontmatterKey(data, legacyKey)) {
-    return normalizeList(data[legacyKey])
+    return normalizeProjectAccessPaths(normalizeList(data[legacyKey]))
   }
 
-  return fallback
+  return normalizeProjectAccessPaths(fallback)
 }
 
 function normalizeObject(value) {

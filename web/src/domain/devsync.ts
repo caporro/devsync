@@ -1,7 +1,7 @@
 export type ProjectCounts = {
-  artifacts: number
+  resources: number
   logs: number
-  generated: number
+  work: number
   tasks?: number
 }
 
@@ -19,7 +19,7 @@ export type ProjectSummary = {
 export type ProjectFile = {
   name: string
   path: string
-  kind: "artifacts" | "logs" | "generated" | "tasks" | "docs"
+  kind: "resources" | "logs" | "work" | "tasks" | "docs"
   size: number
   title?: string | null
   owner?: string | null
@@ -145,9 +145,9 @@ export type PlanningGanttData = {
 export type ProjectDetails = ProjectSummary & {
   activity: ActivityLogPage
   files: {
-    artifacts: ProjectFile[]
+    resources: ProjectFile[]
     logs: ProjectFile[]
-    generated: ProjectFile[]
+    work: ProjectFile[]
     tasks?: ProjectFile[]
   }
 }

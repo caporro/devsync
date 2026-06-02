@@ -530,7 +530,7 @@ export async function addLog(projectId: string, body: AddLogRequest) {
 
 export async function addTextArtifact(projectId: string, body: AddTextArtifactRequest) {
   return jsonRequest<{ name: string; path: string }>(
-    `/api/projects/${projectId}/artifacts/text`,
+    `/api/projects/${projectId}/resources/text`,
     {
       method: "POST",
       body: JSON.stringify(body),
@@ -540,7 +540,7 @@ export async function addTextArtifact(projectId: string, body: AddTextArtifactRe
 
 export async function addLinkArtifact(projectId: string, body: AddLinkArtifactRequest) {
   return jsonRequest<{ name: string; path: string }>(
-    `/api/projects/${projectId}/artifacts/link`,
+    `/api/projects/${projectId}/resources/link`,
     {
       method: "POST",
       body: JSON.stringify(body),
@@ -550,7 +550,7 @@ export async function addLinkArtifact(projectId: string, body: AddLinkArtifactRe
 
 export async function addExcalidrawArtifact(projectId: string, body: { title?: string; content?: string; author?: string }) {
   return jsonRequest<{ name: string; path: string }>(
-    `/api/projects/${projectId}/artifacts/excalidraw`,
+    `/api/projects/${projectId}/resources/excalidraw`,
     {
       method: "POST",
       body: JSON.stringify(body),
@@ -566,7 +566,7 @@ export async function uploadArtifact(projectId: string, file: File, author?: str
   formData.set("file", file)
 
   return parseResponse<{ name: string; path: string }>(
-    await fetch(`/api/projects/${projectId}/artifacts/upload`, {
+    await fetch(`/api/projects/${projectId}/resources/upload`, {
       method: "POST",
       credentials: "same-origin",
       body: formData,
@@ -596,7 +596,7 @@ export async function updateTaskIndex(projectId: string, items: TaskIndexItem[])
 
 export async function updateArtifactIndex(projectId: string, items: FileIndexItem[]) {
   return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/artifacts/readme`,
+    `/api/projects/${projectId}/resources/readme`,
     {
       method: "PATCH",
       body: JSON.stringify({ items }),
@@ -606,7 +606,7 @@ export async function updateArtifactIndex(projectId: string, items: FileIndexIte
 
 export async function updateArtifactContent(projectId: string, path: string, content: string, author?: string) {
   return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/artifacts?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/resources?path=${encodeURIComponent(path)}`,
     {
       method: "PATCH",
       body: JSON.stringify({ content, author }),
@@ -622,7 +622,7 @@ export async function updateExcalidrawArtifact(
   title?: string
 ) {
   return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/artifacts/excalidraw?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/resources/excalidraw?path=${encodeURIComponent(path)}`,
     {
       method: "PATCH",
       body: JSON.stringify({ content, author, title }),
@@ -632,7 +632,7 @@ export async function updateExcalidrawArtifact(
 
 export async function updateGeneratedContent(projectId: string, path: string, content: string, author?: string) {
   return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/generated/content?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/work/content?path=${encodeURIComponent(path)}`,
     {
       method: "PATCH",
       body: JSON.stringify({ content, author }),
@@ -652,7 +652,7 @@ export async function updateTaskContent(projectId: string, path: string, content
 
 export async function deleteArtifact(projectId: string, path: string) {
   return jsonRequest<{ path: string; deleted: boolean }>(
-    `/api/projects/${projectId}/artifacts?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/resources?path=${encodeURIComponent(path)}`,
     {
       method: "DELETE",
     }

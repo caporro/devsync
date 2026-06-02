@@ -23,7 +23,7 @@ data/<vault>/
         qa.md
       automations/
         daily-digest.md
-      artifacts/
+      resources/
         readme.md
         2026-05-24-note.md
         architecture.png
@@ -34,7 +34,7 @@ data/<vault>/
       logs/
         activity/
           2026-05.md
-      generated/
+      work/
         situation.md
   .assistant/
     threads/
@@ -46,7 +46,7 @@ data/<vault>/
 | --- | --- |
 | `README.md` | General vault notes. |
 | `assistant.md` | Global Assistant instructions. |
-| `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `artifacts/...`, `tasks/...`, or `generated/...` path when the task has `projectId`. |
+| `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `resources/...`, `tasks/...`, or `work/...` path when the task has `projectId`. |
 | `roles/` | Global Assistant roles. |
 | `automations/` | Global automations. |
 | `docs/` | Team documentation not tied to a single project. |
@@ -62,19 +62,19 @@ data/<vault>/
 | `assistant.md` | Project Assistant instructions. |
 | `roles/` | Project-specific roles. |
 | `automations/` | Project-specific automations. |
-| `artifacts/` | Project material. |
+| `resources/` | Raw material, inputs, sources, uploads, links, and notes. |
 | `tasks/` | Project tasks. |
 | `logs/` | Project logs. |
-| `generated/` | Generated outputs. |
+| `work/` | Produced or refined material from Assistant, automations, or people. |
 
 ## Special Files
 
 | File | Notes |
 | --- | --- |
-| `artifacts/readme.md` | Artifact index. |
+| `resources/readme.md` | Resource index. |
 | `tasks/README.md` | Task index. |
 | `logs/activity/*` | Activity log segments. |
-| `generated/*.md` | Assistant/automation outputs. |
+| `work/*.md` | Assistant/automation/person-produced outputs. |
 
 ## Legacy Compatibility
 
@@ -84,6 +84,8 @@ The code supports some legacy paths:
 - `agents.md` as the old project assistant file;
 - `agents/*.md` or `agents/<name>/AGENT.md`;
 - `gantt.json` as the old global planning file;
-- `plan/` as the old task area.
+- `plan/` as the old task area;
+- `artifacts/` as the old resources area;
+- `generated/` as the old work area.
 
 Use the modern paths for new vaults.

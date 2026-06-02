@@ -192,6 +192,86 @@ test("legacy plan folders migrate to tasks folders", async () => {
   assert.match(await fs.readFile(path.join(root, "tasks", "README.md"), "utf8"), /^# Tasks/m)
 })
 
+test("new projects create resources and work folders", async () => {
+  const cookie = await login()
+  const projectId = await createProject(cookie, "security-new-folders")
+  const root = projectDir(projectId)
+
+  assert.equal(await pathExists(path.join(root, "resources")), true)
+  assert.equal(await pathExists(path.join(root, "work")), true)
+  assert.equal(await pathExists(path.join(root, "artifacts")), false)
+  assert.equal(await pathExists(path.join(root, "generated")), false)
+})
+
+test("legacy artifacts and generated folders migrate to resources and work", async () => {
+  const cookie = await login()
+  const projectId = "legacy-resource-migration"
+  const root = projectDir(projectId)
+
+  await fs.mkdir(path.join(root, "artifacts"), { recursive: true })
+  await fs.mkdir(path.join(root, "generated"), { recursive: true })
+  await fs.writeFile(path.join(root, "project.json"), "{}\n", "utf8")
+  await fs.writeFile(path.join(root, "artifacts", "source.md"), "# Source\n", "utf8")
+  await fs.writeFile(path.join(root, "generated", "report.md"), "# Report\n", "utf8")
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/projects/${projectId}`,
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(await pathExists(path.join(root, "artifacts")), false)
+  assert.equal(await pathExists(path.join(root, "generated")), false)
+  assert.equal(await pathExists(path.join(root, "resources", "source.md")), true)
+  assert.equal(await pathExists(path.join(root, "work", "report.md")), true)
+  assert.deepEqual(response.json().files.resources.map((file) => file.path), ["resources/source.md"])
+  assert.deepEqual(response.json().files.work.map((file) => file.path), ["work/report.md"])
+})
+
+test("legacy folders are still read when canonical folders already exist", async () => {
+  const cookie = await login()
+  const projectId = "legacy-resource-coexist"
+  const root = projectDir(projectId)
+
+  await fs.mkdir(path.join(root, "resources"), { recursive: true })
+  await fs.mkdir(path.join(root, "artifacts"), { recursive: true })
+  await fs.mkdir(path.join(root, "work"), { recursive: true })
+  await fs.mkdir(path.join(root, "generated"), { recursive: true })
+  await fs.writeFile(path.join(root, "project.json"), "{}\n", "utf8")
+  await fs.writeFile(path.join(root, "resources", "current.md"), "# Current\n", "utf8")
+  await fs.writeFile(path.join(root, "artifacts", "legacy.md"), "# Legacy\n", "utf8")
+  await fs.writeFile(path.join(root, "work", "current.md"), "# Current\n", "utf8")
+  await fs.writeFile(path.join(root, "generated", "legacy.md"), "# Legacy\n", "utf8")
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/projects/${projectId}`,
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(await pathExists(path.join(root, "artifacts", "legacy.md")), true)
+  assert.equal(await pathExists(path.join(root, "generated", "legacy.md")), true)
+  assert.deepEqual(
+    response.json().files.resources.map((file) => file.path).sort(),
+    ["resources/current.md", "resources/legacy.md"]
+  )
+  assert.deepEqual(
+    response.json().files.work.map((file) => file.path).sort(),
+    ["work/current.md", "work/legacy.md"]
+  )
+
+  const update = await patchJson(
+    `/api/projects/${projectId}/resources/content?path=${encodeURIComponent("resources/legacy.md")}`,
+    cookie,
+    { content: "# Updated legacy\n" }
+  )
+
+  assert.equal(update.statusCode, 200)
+  assert.match(await fs.readFile(path.join(root, "artifacts", "legacy.md"), "utf8"), /# Updated legacy/)
+})
+
 test("invalid MCP bearer attempts are rate limited", async () => {
   clearRateLimits()
 
@@ -240,8 +320,8 @@ test("project write routes reject path traversal", async () => {
   const traversal = encodeURIComponent("../project.json")
 
   const attempts = [
-    `/api/projects/${projectId}/artifacts/content?path=${traversal}`,
-    `/api/projects/${projectId}/generated/content?path=${traversal}`,
+    `/api/projects/${projectId}/resources/content?path=${traversal}`,
+    `/api/projects/${projectId}/work/content?path=${traversal}`,
     `/api/projects/${projectId}/tasks/content?path=${traversal}`,
   ]
 
@@ -270,23 +350,23 @@ test("project file routes reject symlink escapes", async () => {
   const cookie = await login()
   const projectId = await createProject(cookie, "security-symlinks")
   const outside = path.join(tempRoot, "outside-secret.md")
-  const linkPath = path.join(projectDir(projectId), "artifacts", "escape.md")
+  const linkPath = path.join(projectDir(projectId), "resources", "escape.md")
 
   await fs.writeFile(outside, "do not expose\n", "utf8")
   await fs.symlink(outside, linkPath)
 
   const raw = await app.inject({
     method: "GET",
-    url: `/api/projects/${projectId}/files/raw?path=${encodeURIComponent("artifacts/escape.md")}`,
+    url: `/api/projects/${projectId}/files/raw?path=${encodeURIComponent("resources/escape.md")}`,
     headers: { cookie },
   })
   const download = await app.inject({
     method: "GET",
-    url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("artifacts/escape.md")}`,
+    url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("resources/escape.md")}`,
     headers: { cookie },
   })
   const write = await patchJson(
-    `/api/projects/${projectId}/artifacts/content?path=${encodeURIComponent("artifacts/escape.md")}`,
+    `/api/projects/${projectId}/resources/content?path=${encodeURIComponent("resources/escape.md")}`,
     cookie,
     { content: "# overwritten\n" }
   )
@@ -301,12 +381,12 @@ test("download responses force safe content headers", async () => {
   const cookie = await login()
   const projectId = await createProject(cookie, "security-downloads")
 
-  await writeProjectFile(projectId, "artifacts/preview.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]))
-  await writeProjectFile(projectId, "artifacts/vector.svg", "<svg><script>alert(1)</script></svg>\n")
+  await writeProjectFile(projectId, "resources/preview.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+  await writeProjectFile(projectId, "resources/vector.svg", "<svg><script>alert(1)</script></svg>\n")
 
   const png = await app.inject({
     method: "GET",
-    url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("artifacts/preview.png")}`,
+    url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("resources/preview.png")}`,
     headers: { cookie },
   })
 
@@ -319,7 +399,7 @@ test("download responses force safe content headers", async () => {
 
   const svg = await app.inject({
     method: "GET",
-    url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("artifacts/vector.svg")}`,
+    url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("resources/vector.svg")}`,
     headers: { cookie },
   })
 
@@ -345,7 +425,7 @@ test("uploaded SVG is stored but still downloaded as attachment", async () => {
 
   const upload = await app.inject({
     method: "POST",
-    url: `/api/projects/${projectId}/artifacts/upload`,
+    url: `/api/projects/${projectId}/resources/upload`,
     headers: {
       cookie,
       "content-type": `multipart/form-data; boundary=${boundary}`,
@@ -355,7 +435,7 @@ test("uploaded SVG is stored but still downloaded as attachment", async () => {
   })
 
   assert.equal(upload.statusCode, 201)
-  assert.equal(upload.json().path, "artifacts/uploaded.svg")
+  assert.equal(upload.json().path, "resources/uploaded.svg")
 
   const download = await app.inject({
     method: "GET",
@@ -438,13 +518,13 @@ test("save_generated_markdown does not overwrite existing files", async () => {
   await generatedTool.invoke({ fileName: "report.md", content: "first" })
   await generatedTool.invoke({ fileName: "report.md", content: "second" })
 
-  assert.equal(await fs.readFile(path.join(projectDir(projectId), "generated", "report.md"), "utf8"), "first\n")
-  assert.equal(await fs.readFile(path.join(projectDir(projectId), "generated", "report-1.md"), "utf8"), "second\n")
+  assert.equal(await fs.readFile(path.join(projectDir(projectId), "work", "report.md"), "utf8"), "first\n")
+  assert.equal(await fs.readFile(path.join(projectDir(projectId), "work", "report-1.md"), "utf8"), "second\n")
 })
 
 test("ai tool logging summarizes payloads without raw content or secrets", () => {
   const summary = summarizeToolPayload({
-    path: "generated/report.md",
+    path: "work/report.md",
     content: "vault secret content",
     token: "real-token-value",
     nested: {
@@ -454,7 +534,7 @@ test("ai tool logging summarizes payloads without raw content or secrets", () =>
   })
   const serialized = JSON.stringify(summary)
 
-  assert.equal(summary.path, "generated/report.md")
+  assert.equal(summary.path, "work/report.md")
   assert.equal(summary.token, "[redacted]")
   assert.equal(summary.content.type, "string")
   assert.equal(summary.nested.file_path, "tasks/README.md")
@@ -464,22 +544,22 @@ test("ai tool logging summarizes payloads without raw content or secrets", () =>
 
 test("automation write snapshots diff only declared write paths", async () => {
   const root = path.join(tempRoot, "automation-audit")
-  await fs.mkdir(path.join(root, "generated"), { recursive: true })
-  await fs.mkdir(path.join(root, "artifacts"), { recursive: true })
-  await fs.writeFile(path.join(root, "generated", "existing.md"), "before\n", "utf8")
-  await fs.writeFile(path.join(root, "artifacts", "ignored.md"), "before\n", "utf8")
+  await fs.mkdir(path.join(root, "work"), { recursive: true })
+  await fs.mkdir(path.join(root, "resources"), { recursive: true })
+  await fs.writeFile(path.join(root, "work", "existing.md"), "before\n", "utf8")
+  await fs.writeFile(path.join(root, "resources", "ignored.md"), "before\n", "utf8")
 
-  const before = await snapshotAutomationWritePaths(root, ["generated/**"])
+  const before = await snapshotAutomationWritePaths(root, ["work/**"])
 
-  await fs.writeFile(path.join(root, "generated", "existing.md"), "after changed\n", "utf8")
-  await fs.writeFile(path.join(root, "generated", "new.md"), "new\n", "utf8")
-  await fs.writeFile(path.join(root, "artifacts", "ignored.md"), "after changed\n", "utf8")
+  await fs.writeFile(path.join(root, "work", "existing.md"), "after changed\n", "utf8")
+  await fs.writeFile(path.join(root, "work", "new.md"), "new\n", "utf8")
+  await fs.writeFile(path.join(root, "resources", "ignored.md"), "after changed\n", "utf8")
 
-  const after = await snapshotAutomationWritePaths(root, ["generated/**"])
+  const after = await snapshotAutomationWritePaths(root, ["work/**"])
   const diff = diffAutomationWriteSnapshots(before, after)
 
-  assert.deepEqual(diff.added, ["generated/new.md"])
-  assert.deepEqual(diff.modified, ["generated/existing.md"])
+  assert.deepEqual(diff.added, ["work/new.md"])
+  assert.deepEqual(diff.modified, ["work/existing.md"])
   assert.deepEqual(diff.deleted, [])
-  assert.deepEqual(diff.changed, ["generated/existing.md", "generated/new.md"])
+  assert.deepEqual(diff.changed, ["work/existing.md", "work/new.md"])
 })
