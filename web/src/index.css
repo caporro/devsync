@@ -223,6 +223,27 @@
     background-clip: content-box;
   }
 
+  .devsync-gantt .devsync-gantt-today-marker {
+    width: 2px;
+    background: color-mix(in oklab, var(--destructive) 78%, transparent) !important;
+  }
+
+  .devsync-gantt .devsync-gantt-today-marker .wx-content {
+    background: color-mix(in oklab, var(--destructive) 90%, transparent);
+  }
+
+  .devsync-gantt .devsync-gantt-current-day {
+    background: color-mix(in oklab, var(--primary) 16%, transparent) !important;
+  }
+
+  .devsync-gantt .wx-scale .devsync-gantt-current-day,
+  .devsync-gantt .wx-scale .devsync-gantt-current-week {
+    background: color-mix(in oklab, var(--primary) 22%, transparent) !important;
+    box-shadow: inset 0 -2px 0 var(--primary);
+    color: var(--primary);
+    font-weight: 700;
+  }
+
   .devsync-gantt .wx-table-container {
     min-width: 0;
     overflow-x: hidden !important;

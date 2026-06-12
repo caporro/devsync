@@ -16,7 +16,6 @@ export const PLANNING_DEFAULT_COLUMN_IDS = PLANNING_COLUMN_OPTIONS.map((column) 
 export type PlanningActions = {
   deleteSelected: () => void
   filterByOwner: (owner: string | null) => void
-  save: () => Promise<void>
   toggleColumn: (id: PlanningColumnId) => void
   toggleTaskList: () => void
   zoomIn: () => void

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { MouseEvent, WheelEvent } from "react"
 import { Editor, Gantt, Willow, WillowDark } from "@svar-ui/react-gantt"
-import type { IApi, IColumnConfig, ILink, ITask } from "@svar-ui/react-gantt"
+import type { IApi, IColumnConfig, ILink, IMarker, ITask } from "@svar-ui/react-gantt"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { FilterIcon, FilterRemoveIcon, LinkSquare01Icon } from "@hugeicons/core-free-icons"
 import "@svar-ui/react-gantt/all.css"
@@ -30,6 +30,12 @@ import { cn } from "@/lib/utils"
 
 type PlanningTaskId = string | number
 type PlanningProjectFileOpener = (projectId: string, path: string) => void
+type PlanningViewport = {
+  cellWidth?: number
+  scrollLeft: number
+  scrollTop: number
+  _cellWidth?: number
+}
 type PlanningCalendar = {
   addRule: () => undefined
   clone: () => PlanningCalendar
@@ -46,6 +52,13 @@ type PlanningCalendar = {
 }
 
 const PLANNING_COLUMN_STORAGE_KEY = "devsync.planning.columns"
+const PLANNING_TASK_LIST_WIDTH_STORAGE_KEY = "devsync.planning.taskListWidth"
+const PLANNING_TASK_LIST_MIN_WIDTH = 280
+const PLANNING_TASK_LIST_DEFAULT_WIDTH = 440
+const PLANNING_TASK_LIST_MAX_WIDTH = 720
+const PLANNING_AUTOSAVE_DELAY_MS = 700
+const PLANNING_EMPTY_SELECTION: PlanningTaskId[] = []
+const PLANNING_SCHEDULE = { type: "forward" as const }
 const PLANNING_OFF_DAYS_ENABLED = false
 const PLANNING_COLUMN_BY_ID: Record<PlanningColumnId, IColumnConfig> = {
   text: { id: "text", header: "Step", flexgrow: 2, editor: "text" },
@@ -58,8 +71,19 @@ const PLANNING_COLUMN_BY_ID: Record<PlanningColumnId, IColumnConfig> = {
   progress: { id: "progress", header: "%", align: "center", width: 64, editor: "text" },
 }
 const PLANNING_ADD_TASK_COLUMN_BASE: IColumnConfig = { id: "add-task", header: "", width: 96, align: "center" }
+const PLANNING_COLUMN_WIDTH_WEIGHTS: Record<PlanningColumnId, number> = {
+  text: 2,
+  owner: 1,
+  status: 1,
+  external_id: 1,
+  link: 1,
+  start: 1,
+  duration: 0.7,
+  progress: 0.6,
+}
 const PLANNING_GANTT_SCALES = [
   { unit: "month", step: 1, format: "%F %Y" },
+  { unit: "week", step: 1, format: "W%w" },
   { unit: "day", step: 1, format: "%j" },
 ]
 const PLANNING_EDITOR_ITEMS = [
@@ -110,7 +134,10 @@ function serializeGanttDate(value: unknown) {
   }
 
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10)
+    const year = value.getFullYear()
+    const month = String(value.getMonth() + 1).padStart(2, "0")
+    const day = String(value.getDate()).padStart(2, "0")
+    return `${year}-${month}-${day}`
   }
 
   const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/)
@@ -212,6 +239,52 @@ function serializeGanttLink(link: ILink): PlanningGanttLink | null {
 
 function planningIdKey(value: unknown) {
   return value === undefined || value === null || value === "" ? "" : String(value)
+}
+
+function planningViewport(api: IApi): PlanningViewport {
+  const state = api.getState()
+  return {
+    cellWidth: state.cellWidth,
+    scrollLeft: state.scrollLeft,
+    scrollTop: state.scrollTop,
+    _cellWidth: state._cellWidth,
+  }
+}
+
+function restorePlanningViewport(api: IApi, viewport: PlanningViewport) {
+  const state = {
+    cellWidth: viewport.cellWidth,
+    scrollLeft: viewport.scrollLeft,
+    scrollTop: viewport.scrollTop,
+    _cellWidth: viewport._cellWidth ?? viewport.cellWidth,
+  }
+
+  if (state.cellWidth === undefined) {
+    delete state.cellWidth
+    delete state._cellWidth
+  }
+
+  api.getStores().data.setState(state)
+}
+
+function preservePlanningViewport(api: IApi, viewport: PlanningViewport) {
+  restorePlanningViewport(api, viewport)
+  window.requestAnimationFrame(() => restorePlanningViewport(api, viewport))
+  window.setTimeout(() => restorePlanningViewport(api, viewport), 80)
+  window.setTimeout(() => restorePlanningViewport(api, viewport), 180)
+}
+
+function scrollPlanningToToday(api: IApi) {
+  const state = api.getState()
+  const chartWidth = state._chartWidth ?? 0
+
+  if (!state._scales || !state._start || !state.cellWidth) {
+    return
+  }
+
+  const hours = state._scales.diff(planningDay(new Date()), state._start, "hour")
+  const left = Math.max(0, Math.round(hours * state.cellWidth) - Math.round(chartWidth / 3))
+  void api.exec("scroll-chart", { left, eventSource: "initial-today" })
 }
 
 function planningTaskOwner(task: ITask | PlanningGanttTask) {
@@ -478,6 +551,51 @@ function initialPlanningColumns() {
   return PLANNING_DEFAULT_COLUMN_IDS
 }
 
+function normalizePlanningTaskListWidth(value: unknown, rootWidth?: number) {
+  const width = Number(value)
+  if (!Number.isFinite(width) || width <= 0) {
+    return null
+  }
+
+  const maxWidth = rootWidth
+    ? Math.max(PLANNING_TASK_LIST_MIN_WIDTH, Math.min(PLANNING_TASK_LIST_MAX_WIDTH, rootWidth - 320))
+    : PLANNING_TASK_LIST_MAX_WIDTH
+
+  return Math.min(Math.max(Math.round(width), PLANNING_TASK_LIST_MIN_WIDTH), maxWidth)
+}
+
+function initialPlanningTaskListWidth() {
+  if (typeof window === "undefined") {
+    return PLANNING_TASK_LIST_DEFAULT_WIDTH
+  }
+
+  return normalizePlanningTaskListWidth(window.localStorage.getItem(PLANNING_TASK_LIST_WIDTH_STORAGE_KEY))
+    ?? PLANNING_TASK_LIST_DEFAULT_WIDTH
+}
+
+function planningSizedColumns(columns: IColumnConfig[], taskListWidth: number) {
+  const totalWidth = normalizePlanningTaskListWidth(taskListWidth) ?? PLANNING_TASK_LIST_DEFAULT_WIDTH
+  const actionWidth = Number(PLANNING_ADD_TASK_COLUMN_BASE.width) || 0
+  const availableWidth = Math.max(0, totalWidth - actionWidth)
+  const totalWeight = columns.reduce((sum, column) => {
+    const id = column.id as PlanningColumnId
+    return sum + (PLANNING_COLUMN_WIDTH_WEIGHTS[id] ?? 1)
+  }, 0) || 1
+  let usedWidth = 0
+
+  return columns.map((column, index) => {
+    const id = column.id as PlanningColumnId
+    const width = index === columns.length - 1
+      ? Math.max(1, availableWidth - usedWidth)
+      : Math.max(1, Math.round(availableWidth * ((PLANNING_COLUMN_WIDTH_WEIGHTS[id] ?? 1) / totalWeight)))
+    const next = { ...column, width }
+
+    usedWidth += width
+    delete next.flexgrow
+    return next
+  })
+}
+
 function planningActionColumn(
   onOpenProjectFile?: PlanningProjectFileOpener,
   onFilterTask?: (id: PlanningTaskId) => void,
@@ -500,14 +618,18 @@ function planningColumnsFor(
   ids: PlanningColumnId[],
   onOpenProjectFile?: PlanningProjectFileOpener,
   onFilterTask?: (id: PlanningTaskId) => void,
-  activeBranchTaskId?: PlanningTaskId | null
+  activeBranchTaskId?: PlanningTaskId | null,
+  taskListWidth = PLANNING_TASK_LIST_DEFAULT_WIDTH
 ) {
   const selected = new Set(normalizePlanningColumns(ids))
   const columns = PLANNING_COLUMN_OPTIONS
     .filter((option) => selected.has(option.id))
     .map((option) => PLANNING_COLUMN_BY_ID[option.id])
 
-  return [...columns, planningActionColumn(onOpenProjectFile, onFilterTask, activeBranchTaskId)]
+  return [
+    ...planningSizedColumns(columns, taskListWidth),
+    planningActionColumn(onOpenProjectFile, onFilterTask, activeBranchTaskId),
+  ]
 }
 
 function planningDefaultTask(respectOffDays: boolean) {
@@ -561,8 +683,33 @@ function nextPlanningWorkingDate(value: Date) {
   return date
 }
 
-function highlightPlanningTime(date: Date, unit: "day" | "hour") {
-  return unit === "day" && isPlanningOffDay(date) ? "wx-weekend" : ""
+function planningWeekStart(value: Date) {
+  const date = planningDay(value)
+  date.setDate(date.getDate() - date.getDay())
+  return date
+}
+
+function highlightPlanningTime(date: Date, unit: string) {
+  const classes: string[] = []
+  const day = planningDay(date)
+  const today = planningDay(new Date())
+  const currentWeekStart = planningWeekStart(new Date())
+  const currentWeekEnd = new Date(currentWeekStart)
+  currentWeekEnd.setDate(currentWeekEnd.getDate() + 7)
+
+  if (unit === "day" && isPlanningOffDay(day)) {
+    classes.push("wx-weekend")
+  }
+
+  if (unit === "day" && day.getTime() === today.getTime()) {
+    classes.push("devsync-gantt-current-day")
+  }
+
+  if (unit === "week" && day >= currentWeekStart && day < currentWeekEnd) {
+    classes.push("devsync-gantt-current-week")
+  }
+
+  return classes.join(" ")
 }
 
 function createPlanningCalendar(): PlanningCalendar {
@@ -639,6 +786,17 @@ export function PlanningView({
   const respectOffDaysRef = useRef(PLANNING_OFF_DAYS_ENABLED)
   const spacePressedRef = useRef(false)
   const panStateRef = useRef<{ chart: HTMLElement; startX: number; scrollLeft: number } | null>(null)
+  const [taskListWidth, setTaskListWidth] = useState(initialPlanningTaskListWidth)
+  const taskListWidthRef = useRef<number>(taskListWidth)
+  const initialTodayScrollDoneRef = useRef(false)
+  const saveTimerRef = useRef<number | null>(null)
+  const saveRef = useRef<(() => Promise<void>) | null>(null)
+  const scheduleSaveRef = useRef<() => void>(() => undefined)
+  const saveInFlightRef = useRef(false)
+  const saveAgainRef = useRef(false)
+  const changeVersionRef = useRef(0)
+  const savedTasksRef = useRef<PlanningGanttTask[] | null>(null)
+  const savedLinksRef = useRef<PlanningGanttLink[] | null>(null)
   const [api, setApi] = useState<IApi | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
@@ -653,9 +811,44 @@ export function PlanningView({
   const links = useMemo(() => data?.links ?? [], [data?.links])
   const Theme = isDark ? WillowDark : Willow
 
+  useEffect(() => {
+    savedTasksRef.current = tasks.map(serializeGanttTask)
+  }, [tasks])
+
+  useEffect(() => {
+    savedLinksRef.current = links
+  }, [links])
+
+  const todayMarkers = useMemo<IMarker[]>(() => [
+    {
+      start: planningDay(new Date()),
+      text: "Today",
+      css: "devsync-gantt-today-marker",
+    },
+  ], [])
+
   const markDirty = useCallback(() => {
+    changeVersionRef.current += 1
     setIsDirty(true)
   }, [])
+
+  const saveTaskListWidth = useCallback(() => {
+    const root = ganttRootRef.current
+    const table = root?.querySelector<HTMLElement>(".wx-table-container")
+
+    if (!root || !table || !taskListVisible) {
+      return
+    }
+
+    const width = normalizePlanningTaskListWidth(table.getBoundingClientRect().width, root.getBoundingClientRect().width)
+    if (!width) {
+      return
+    }
+
+    taskListWidthRef.current = width
+    setTaskListWidth(width)
+    window.localStorage.setItem(PLANNING_TASK_LIST_WIDTH_STORAGE_KEY, String(width))
+  }, [taskListVisible])
 
   const refreshLayout = useCallback(() => {
     const resize = () => {
@@ -697,8 +890,8 @@ export function PlanningView({
   }, [branchFilterTaskId])
 
   const columns = useMemo(
-    () => planningColumnsFor(visibleColumns, onOpenProjectFile, applyBranchFilter, branchFilterTaskId),
-    [applyBranchFilter, branchFilterTaskId, onOpenProjectFile, visibleColumns]
+    () => planningColumnsFor(visibleColumns, onOpenProjectFile, applyBranchFilter, branchFilterTaskId, taskListWidth),
+    [applyBranchFilter, branchFilterTaskId, onOpenProjectFile, taskListWidth, visibleColumns]
   )
 
   const ownerOptions = useMemo(() => {
@@ -827,15 +1020,35 @@ export function PlanningView({
     apiRef.current = nextApi
     setApi(nextApi)
 
+    if (!initialTodayScrollDoneRef.current) {
+      initialTodayScrollDoneRef.current = true
+      window.requestAnimationFrame(() => scrollPlanningToToday(nextApi))
+      window.setTimeout(() => scrollPlanningToToday(nextApi), 80)
+      window.setTimeout(() => scrollPlanningToToday(nextApi), 180)
+    }
+
     const tag = Symbol("planning-gantt")
+    let addTaskViewport: PlanningViewport | null = null
+    let selectTaskViewport: PlanningViewport | null = null
+    let editorViewport: PlanningViewport | null = null
     nextApi.intercept("add-task", (event) => {
+      addTaskViewport = planningViewport(nextApi)
       event.task = {
         ...planningDefaultTask(respectOffDaysRef.current),
         ...event.task,
         text: String(event.task?.text ?? "").trim() || "New step",
       }
       event.select = true
-      event.show = true
+      event.show = false
+    }, { tag })
+
+    nextApi.intercept("select-task", (event) => {
+      selectTaskViewport = planningViewport(nextApi)
+      event.show = false
+    }, { tag })
+
+    nextApi.intercept("show-editor", () => {
+      editorViewport = planningViewport(nextApi)
     }, { tag })
 
     nextApi.intercept("delete-task", (event) => {
@@ -850,26 +1063,50 @@ export function PlanningView({
     ;["add-task", "update-task", "delete-task", "move-task", "copy-task", "add-link", "update-link", "delete-link"].forEach((eventName) => {
       nextApi.on(eventName, () => {
         markDirty()
+        scheduleSaveRef.current()
         refreshLayout()
       }, { tag })
     })
 
     nextApi.on("select-task", () => {
-      window.setTimeout(() => setSelectedTaskId(nextApi.getState().selected?.[0] ?? null), 0)
+      window.setTimeout(() => {
+        const viewport = selectTaskViewport
+        setSelectedTaskId(nextApi.getState().selected?.[0] ?? null)
+        if (viewport) {
+          preservePlanningViewport(nextApi, viewport)
+        }
+        selectTaskViewport = null
+      }, 0)
+    }, { tag })
+
+    nextApi.on("show-editor", () => {
+      window.setTimeout(() => {
+        const viewport = editorViewport
+        if (viewport) {
+          preservePlanningViewport(nextApi, viewport)
+        }
+        editorViewport = null
+      }, 0)
     }, { tag })
 
     nextApi.on("add-task", (event) => {
       window.setTimeout(() => {
         if (event.id) {
+          const viewport = addTaskViewport
           setSelectedTaskId(event.id)
           void nextApi.exec("show-editor", { id: event.id })
+          if (viewport) {
+            preservePlanningViewport(nextApi, viewport)
+          }
           refreshLayout()
         }
+        addTaskViewport = null
       }, 0)
     }, { tag })
   }, [markDirty, refreshLayout, requestDelete])
 
-  const handleSave = useCallback(async () => {
+  const saveCurrentPlanning = useCallback(async () => {
+    const saveVersion = changeVersionRef.current
     const nextApi = apiRef.current
     const apiTasks = nextApi?.serialize() ?? visibleTasks
     const nextTasks = apiTasks.map((task) => {
@@ -890,11 +1127,15 @@ export function PlanningView({
         tasks: nextTasks,
         links: nextLinks,
       })
-      setIsDirty(false)
+      savedTasksRef.current = nextTasks
+      savedLinksRef.current = nextLinks
+      if (changeVersionRef.current === saveVersion) {
+        setIsDirty(false)
+      }
       return
     }
 
-    const allTasks = tasks.map(serializeGanttTask)
+    const allTasks = savedTasksRef.current ?? tasks.map(serializeGanttTask)
     const originalTaskKeys = new Set(allTasks.map((task) => planningIdKey(task.id)).filter(Boolean))
     const visibleOriginalTaskKeys = new Set(visibleTasks.map((task) => planningIdKey(task.id)).filter(Boolean))
     const savedTaskKeys = new Set(nextTasks.map((task) => planningIdKey(task.id)).filter(Boolean))
@@ -952,7 +1193,9 @@ export function PlanningView({
     const savedLinkByKey = new Map(nextLinks.map((link) => [planningLinkKey(link), link] as const))
     const mergedLinks: PlanningGanttLink[] = []
 
-    links.forEach((link) => {
+    const allLinks = savedLinksRef.current ?? links
+
+    allLinks.forEach((link) => {
       const key = planningLinkKey(link)
       const hasRemovedTask = removedTaskKeys.has(planningIdKey(link.source)) || removedTaskKeys.has(planningIdKey(link.target))
 
@@ -977,14 +1220,47 @@ export function PlanningView({
       const key = planningLinkKey(link)
       const hasRemovedTask = removedTaskKeys.has(planningIdKey(link.source)) || removedTaskKeys.has(planningIdKey(link.target))
 
-      if (!hasRemovedTask && !links.some((current) => planningLinkKey(current) === key)) {
+      if (!hasRemovedTask && !allLinks.some((current) => planningLinkKey(current) === key)) {
         mergedLinks.push(link)
       }
     })
 
     await onSave({ tasks: mergedTasks, links: mergedLinks })
-    setIsDirty(false)
+    savedTasksRef.current = mergedTasks
+    savedLinksRef.current = mergedLinks
+    if (changeVersionRef.current === saveVersion) {
+      setIsDirty(false)
+    }
   }, [filtersActive, links, onSave, parentOverrides, tasks, visibleLinkKeys, visibleLinks, visibleTasks])
+
+  const runQueuedSave = useCallback(async () => {
+    if (saveInFlightRef.current) {
+      saveAgainRef.current = true
+      return
+    }
+
+    saveInFlightRef.current = true
+
+    try {
+      do {
+        saveAgainRef.current = false
+        await saveCurrentPlanning()
+      } while (saveAgainRef.current)
+    } finally {
+      saveInFlightRef.current = false
+    }
+  }, [saveCurrentPlanning])
+
+  const scheduleSave = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current)
+    }
+
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null
+      void saveRef.current?.().catch(() => undefined)
+    }, PLANNING_AUTOSAVE_DELAY_MS)
+  }, [])
 
   const confirmDeleteTasks = useCallback(() => {
     const nextApi = apiRef.current
@@ -1012,7 +1288,6 @@ export function PlanningView({
       setOwnerFilter(owner?.trim() || null)
       refreshLayout()
     },
-    save: handleSave,
     toggleColumn: (id) => {
       if (id === "text") {
         return
@@ -1037,7 +1312,7 @@ export function PlanningView({
     zoomOut: () => {
       void apiRef.current?.exec("zoom-scale", { dir: -1 }).then(refreshLayout)
     },
-  }), [currentSelectedIds, handleSave, refreshLayout, requestDelete])
+  }), [currentSelectedIds, refreshLayout, requestDelete])
 
   useEffect(() => {
     onActionsChange(actions)
@@ -1056,6 +1331,24 @@ export function PlanningView({
   }, [activeOwnerFilter, isDirty, onStatusChange, ownerOptions, selectedTaskId, selectedTaskVisible, taskListVisible, visibleColumns])
 
   useEffect(() => () => onStatusChange(null), [onStatusChange])
+
+  useEffect(() => {
+    saveRef.current = runQueuedSave
+  }, [runQueuedSave])
+
+  useEffect(() => {
+    scheduleSaveRef.current = scheduleSave
+  }, [scheduleSave])
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+        void saveRef.current?.().catch(() => undefined)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     window.localStorage.setItem(PLANNING_COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns))
@@ -1113,6 +1406,31 @@ export function PlanningView({
   useEffect(() => {
     refreshLayout()
   }, [columns, isDirty, refreshLayout, taskListVisible, visibleLinks, visibleTasks])
+
+  useEffect(() => {
+    const root = ganttRootRef.current
+    if (!root || !api) {
+      return
+    }
+
+    function handleMouseDown(event: globalThis.MouseEvent) {
+      if (!(event.target instanceof Element) || !event.target.closest(".wx-layout > .wx-resizer")) {
+        return
+      }
+
+      window.addEventListener("mouseup", handleMouseUp, { once: true })
+    }
+
+    function handleMouseUp() {
+      window.requestAnimationFrame(saveTaskListWidth)
+    }
+
+    root.addEventListener("mousedown", handleMouseDown)
+    return () => {
+      root.removeEventListener("mousedown", handleMouseDown)
+      window.removeEventListener("mouseup", handleMouseUp)
+    }
+  }, [api, saveTaskListWidth])
 
   useEffect(() => {
     function isInputTarget(target: EventTarget | null) {
@@ -1210,7 +1528,12 @@ export function PlanningView({
     }
 
     event.preventDefault()
-    void apiRef.current?.exec("zoom-scale", {
+    const nextApi = apiRef.current
+    if (!nextApi) {
+      return
+    }
+
+    void nextApi.exec("zoom-scale", {
       dir: event.deltaY < 0 ? 1 : -1,
       offset: event.currentTarget.clientWidth / 2,
     }).then(refreshLayout)
@@ -1234,18 +1557,21 @@ export function PlanningView({
               onWheel={handleWheel}
               ref={ganttRootRef}
             >
-              {api ? <Editor api={api} autoSave={false} items={PLANNING_EDITOR_ITEMS} placement="sidebar" /> : null}
+              {api ? <Editor api={api} autoSave items={PLANNING_EDITOR_ITEMS} placement="sidebar" /> : null}
               <div className="h-full min-h-0 min-w-0">
                 <Gantt
-                  autoScale
+                  autoScale={false}
                   calendar={PLANNING_OFF_DAYS_ENABLED ? PLANNING_CALENDAR : undefined}
                   cellBorders="full"
                   columns={columns}
                   highlightTime={highlightPlanningTime}
                   init={handleInit}
                   links={visibleLinks}
+                  markers={todayMarkers}
                   ref={apiRef}
                   scales={PLANNING_GANTT_SCALES}
+                  schedule={PLANNING_SCHEDULE}
+                  selected={PLANNING_EMPTY_SELECTION}
                   tasks={visibleTasks}
                   zoom
                 />

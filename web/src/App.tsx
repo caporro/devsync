@@ -4656,6 +4656,16 @@ function WorkspaceApp({
     setPlanningStatus(status)
   }, [])
 
+  const handleOpenProjectFileLinkRef = useRef(handleOpenProjectFileLink)
+
+  useEffect(() => {
+    handleOpenProjectFileLinkRef.current = handleOpenProjectFileLink
+  })
+
+  const handlePlanningOpenProjectFile = useCallback((projectId: string, path: string) => {
+    handleOpenProjectFileLinkRef.current(path, projectId)
+  }, [])
+
   function toggleTheme() {
     const isDark = document.documentElement.classList.contains("dark")
     setTheme(isDark ? "light" : "dark")
@@ -5351,9 +5361,11 @@ function WorkspaceApp({
   async function handleSavePlanningGantt(data: Pick<PlanningGanttData, "tasks" | "links">) {
     await run("planning-gantt", async () => {
       const saved = await updatePlanningGantt(data)
-      queryClient.setQueryData(["planning-gantt"], saved)
+      if (mainView !== "planning") {
+        queryClient.setQueryData(["planning-gantt"], saved)
+      }
       await queryClient.invalidateQueries({ queryKey: ["system-log"] })
-    })
+    }, { throwOnError: true })
   }
 
   async function handleLoadOlderActivity() {
@@ -6460,7 +6472,7 @@ function WorkspaceApp({
             ) : mainView === "planning" ? (
               <div className="flex shrink-0 items-center gap-2">
                 <span className="hidden text-xs text-muted-foreground lg:inline">
-                  {planningStatus?.dirty ? "Unsaved" : "Saved"}
+                  {busyAction === "planning-gantt" ? "Saving..." : planningStatus?.dirty ? "Unsaved" : "Saved"}
                 </span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -6538,15 +6550,6 @@ function WorkspaceApp({
                   variant="outline"
                 >
                   <HugeiconsIcon icon={planningStatus?.taskListVisible ? PanelLeftCloseIcon : PanelLeftOpenIcon} strokeWidth={2} />
-                </Button>
-                <Button
-                  disabled={busyAction === "planning-gantt"}
-                  onClick={() => void planningActionsRef.current?.save()}
-                  title="Save planning"
-                  type="button"
-                >
-                  <HugeiconsIcon icon={FloppyDiskIcon} strokeWidth={2} />
-                  {busyAction === "planning-gantt" ? "Saving..." : "Save"}
                 </Button>
                 <Button
                   onClick={() => setPlanningFullscreen((current) => !current)}
@@ -6708,7 +6711,7 @@ function WorkspaceApp({
                       isDark={theme === "dark" || (theme === "system" && document.documentElement.classList.contains("dark"))}
                       isLoading={planningQuery.isLoading}
                       onActionsChange={handlePlanningActionsChange}
-                      onOpenProjectFile={(projectId, path) => handleOpenProjectFileLink(path, projectId)}
+                      onOpenProjectFile={handlePlanningOpenProjectFile}
                       onSave={handleSavePlanningGantt}
                       onStatusChange={handlePlanningStatusChange}
                     />
