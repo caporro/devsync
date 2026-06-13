@@ -1,9 +1,26 @@
-# Devsync - AI-heavy team context engine 
+# Devsync - Open-source Team Context Engine for human and AI teams
 
-DevSync is a local-first, self-hosted team context engine that keeps updates, documentation, resources, activity logs, tasks, AI assistants, and automations in sync—turning scattered inputs into shared context, useful outputs, and trackable actions, all stored in a readable filesystem vault that can be inspected and versioned with Git.
+Devsync is an open-source, self-hosted Team Context Engine that keeps human teams, assistants, automations, and AI agents aligned through a local-first, Git-versioned project memory.
 
+It turns scattered updates, decisions, resources, tasks, work files, and AI instructions into shared operational context stored in readable Markdown and JSON files.
 
 ![devsync](docs/screen-demo-drawing.png)
+
+## Why Devsync
+
+AI makes teams faster, but faster output creates a new bottleneck: keeping everyone aligned on the real state of the work.
+
+Teams already have chat, tickets, docs, repositories, AI chats, and meetings. Each tool holds a fragment of truth, but none of them becomes a shared operational memory for people and agents.
+
+Devsync gives the project a durable context layer:
+
+- updates become activity log;
+- long material becomes resources;
+- next actions become tasks;
+- generated output becomes work files;
+- Assistant and automations operate on the same project memory;
+- external AI clients can access context through MCP;
+- the whole vault stays readable, portable, and Git-versioned.
 
 ## Getting Started / Try
 
@@ -30,19 +47,16 @@ docker hub images: [https://hub.docker.com/r/caporro/devsync](https://hub.docker
 
 ![screen edit md](docs/screen-demo-edit-md.png)
 
-## Work Method
+## Core Workflow
 
-Devsync starts from a simple idea: teams should leave a trace of work where work actually happens.
+Devsync starts from a simple idea: teams should capture context while work happens, not reconstruct it later from fragments.
 
-Typical flow:
+The workflow is:
 
-1. create a project;
-2. write short updates in the activity log;
-3. save long-form material as resources;
-4. create tasks for work to be done;
-5. use My Tasks to see what is assigned to you;
-6. use Assistant and automations to summarize, update reports, and generate outputs;
-7. use Team Docs for shared knowledge not tied to a single project, such as guidelines, statements, ADRs, and similar documents.
+1. **Capture** updates, decisions, tasks, resources, files, and outputs.
+2. **Structure** them around a project/topic in a readable vault.
+3. **Retrieve** the current state through UI, files, Assistant, automations, or MCP.
+4. **Act** by creating tasks, updating work files, summarizing state, or running automations.
 
 Practical rules:
 
@@ -52,6 +66,27 @@ Practical rules:
 - work = produced or refined output;
 - docs = team knowledge;
 - vault = data source.
+
+## Who It Is For
+
+Devsync is built first for:
+
+- AI-heavy software teams that need less status chasing and better shared context;
+- solo founders managing multiple projects with AI agents;
+- technical teams that prefer self-hosted, open-source, filesystem-first tools;
+- teams that want AI assistants and automations to work on real project context, not copied prompts.
+
+It can later fit any team that works by project and needs shared context between people and AI.
+
+## What Devsync Is Not
+
+Devsync is not another wiki, another AI chat, or a Jira replacement.
+
+It does not need to replace your whole stack. It gives your stack a shared context layer.
+
+- Use chat for conversation.
+- Use issue trackers for workflow.
+- Use Devsync for operational memory.
 
 ## Local Run
 
@@ -128,7 +163,7 @@ docker run -d \
   -e AUTH_SESSION_SECRET='change-me-to-a-long-random-string-at-least-32-chars' \
   -e AUTH_COOKIE_SECURE=true \
   -e OPENAI_API_KEY='sk-...' \
-  caporro/devsync:0.1.24
+  caporro/devsync:0.1.25
 ```
 
 Notes:
@@ -213,6 +248,21 @@ DEVSYNC_GIT_COMMIT_EMAIL=devsync@example.invalid
 ```
 
 Full reference: [docs/reference/env-vars.md](docs/reference/env-vars.md).
+
+## Why Filesystem First
+
+The vault is the source of truth.
+
+This is a product decision, not only a technical one:
+
+- your context stays in files your team owns;
+- Markdown and JSON are readable by humans, agents, editors, shell tools, and Git;
+- Git can version, diff, sync, and back up the project memory;
+- Assistant, automations, and MCP can work on the same underlying context;
+- the data remains usable outside the Devsync UI;
+- no database is required until a derived index or enterprise layer is truly needed.
+
+No database does not mean no structure. It means the structure lives in files.
 
 ## Vault Structure
 
