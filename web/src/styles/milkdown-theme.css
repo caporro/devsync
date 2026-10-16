@@ -199,6 +199,13 @@
   width: 100%;
 }
 
+.markdown-editor--wide {
+  --markdown-side-gutter: 1.5rem;
+
+  width: 100%;
+  max-width: none;
+}
+
 .markdown-editor--fill .markdown-source-editor {
   min-height: 100%;
 }

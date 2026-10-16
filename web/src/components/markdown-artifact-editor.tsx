@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { FullScreenIcon, MinimizeScreenIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 import { CrepeMarkdownEditor } from "@/components/crepe-markdown-editor"
 import type {
@@ -6,6 +8,8 @@ import type {
   MarkdownCommandFile,
   MarkdownCommandUser,
 } from "@/components/crepe-markdown-editor"
+import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { sanitizeMarkdownLinks } from "@/lib/markdown-safety"
 
 export type MarkdownEditorMode = "rich" | "source"
@@ -177,6 +181,7 @@ function LoadedMarkdownArtifactEditor({
   const metadata = parseFrontmatter(content)
   const editorRef = useRef<CrepeMarkdownEditorHandle>(null)
   const [mode, setMode] = useState<MarkdownEditorMode>("rich")
+  const [wideEditor, setWideEditor] = useState(false)
   const [savedFullContent, setSavedFullContent] = useState(initialFullContent)
   const [draftFullContent, setDraftFullContent] = useState(initialFullContent)
   const [savedBody, setSavedBody] = useState(initialBody)
@@ -308,18 +313,33 @@ function LoadedMarkdownArtifactEditor({
 
   return (
     <section className="relative mx-auto flex min-h-full w-full flex-col">
-      <div className="markdown-editor mb-4">
-        <div className="flex max-w-full flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span className="truncate">{path || title}</span>
-          {metadata.creator ? <span>{metadata.creator}</span> : null}
-          {metadata.created ? (
-            <span>{formatMetaDate(metadata.created)}</span>
-          ) : null}
+      <div className={cn("markdown-editor mb-4", wideEditor && "markdown-editor--wide")}>
+        <div className="flex max-w-full items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className="truncate">{path || title}</span>
+            {metadata.creator ? <span>{metadata.creator}</span> : null}
+            {metadata.created ? (
+              <span>{formatMetaDate(metadata.created)}</span>
+            ) : null}
+          </div>
+          <Button
+            aria-label={wideEditor ? "Use standard width" : "Use full editor box width"}
+            aria-pressed={wideEditor}
+            className="shrink-0"
+            onClick={() => setWideEditor((current) => !current)}
+            size="sm"
+            title={wideEditor ? "Use standard width" : "Use full editor box width"}
+            type="button"
+            variant="outline"
+          >
+            <HugeiconsIcon icon={wideEditor ? MinimizeScreenIcon : FullScreenIcon} strokeWidth={2} />
+            <span className="hidden sm:inline">{wideEditor ? "Standard" : "Wide"}</span>
+          </Button>
         </div>
       </div>
 
       {mode === "source" ? (
-        <div className="markdown-editor markdown-editor--fill">
+        <div className={cn("markdown-editor markdown-editor--fill", wideEditor && "markdown-editor--wide")}>
           <textarea
             className="markdown-source-editor min-h-[60vh] w-full resize-none overflow-hidden bg-transparent pt-0 pb-4 font-mono text-sm leading-7 text-foreground outline-none placeholder:text-muted-foreground"
             disabled={isSaving}
@@ -330,7 +350,7 @@ function LoadedMarkdownArtifactEditor({
           />
         </div>
       ) : (
-        <div className="markdown-editor">
+        <div className={cn("markdown-editor", wideEditor && "markdown-editor--wide")}>
           <CrepeMarkdownEditor
             ref={editorRef}
             className="devsync-crepe-editor--tall"
