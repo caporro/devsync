@@ -177,12 +177,12 @@ async function currentMcpUser(request) {
   return null
 }
 
-function isPublicApiPath(url) {
-  return ["/api/health", "/api/auth/me", "/api/auth/login", "/api/auth/logout"].includes(url.split("?")[0])
+function isPublicApiRoute(route) {
+  return ["/api/health", "/api/auth/me", "/api/auth/login", "/api/auth/logout"].includes(route)
 }
 
 function requireAuth(request, reply, done) {
-  if (isPublicApiPath(request.url)) {
+  if (isPublicApiRoute(request.routeOptions.url)) {
     done()
     return
   }
@@ -360,7 +360,8 @@ app.register(fastifyMultipart, {
 })
 
 app.addHook("preHandler", (request, reply, done) => {
-  if (request.url.startsWith("/api/")) {
+  // Match the router's resolved route, including percent-encoded URL variants.
+  if (request.routeOptions.url?.startsWith("/api/")) {
     requireAuth(request, reply, done)
     return
   }

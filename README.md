@@ -163,7 +163,7 @@ docker run -d \
   -e AUTH_SESSION_SECRET='change-me-to-a-long-random-string-at-least-32-chars' \
   -e AUTH_COOKIE_SECURE=true \
   -e OPENAI_API_KEY='sk-...' \
-  caporro/devsync:0.1.25
+  caporro/devsync:0.1.26
 ```
 
 Notes:
@@ -178,6 +178,21 @@ Docker Compose:
 ```bash
 docker compose up -d
 ```
+
+### CI and Docker Hub releases
+
+The GitHub workflow runs syntax checks, backend/frontend tests, lint, build, and dependency audits on pushes and pull requests. It then builds and tests the production AMD64 image without network access, and builds both `linux/amd64` and `linux/arm64` with Buildx. Node 24 is used in CI and both Docker stages.
+
+Publishing is limited to `v*` tags in `caporro/devsync`, after all checks pass. The tag must exactly match the version in both `package.json` files, for example `v0.1.26`. A stable release publishes `caporro/devsync:0.1.26`, `latest`, and a commit SHA tag, with SBOM and provenance attestations. Branches and pull requests never publish images.
+
+Configure these GitHub Actions repository settings before publishing:
+
+- variable `DOCKERHUB_USERNAME`: the Docker Hub account used to push to `caporro/devsync`;
+- secret `DOCKERHUB_TOKEN`: a Docker Hub access token with permission to push that image.
+
+Publishing an image does not update a running installation. Production must be updated separately to the chosen version or digest.
+
+Authentication and dependency patch details: [security notes](docs/reference/security.md).
 
 ## Configure
 

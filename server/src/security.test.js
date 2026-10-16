@@ -125,6 +125,54 @@ async function patchJson(url, cookie, body = { content: "# changed\n" }) {
   })
 }
 
+test("password auth protects encoded API reads and writes", async () => {
+  for (const prefix of ["/api", "/%61pi", "/a%70i", "/ap%69", "/%61%70%69"]) {
+    for (const route of ["/users", "/%75sers", "/projects", "/system-log"]) {
+      const response = await app.inject({ method: "GET", url: `${prefix}${route}?limit=1` })
+      assert.equal(response.statusCode, 401, `${prefix}${route} must require a session`)
+      assert.deepEqual(response.json(), { error: "Unauthorized" })
+    }
+
+    const response = await app.inject({
+      method: "POST",
+      url: `${prefix}/projects`,
+      payload: { name: "Unauthorized project", slug: "unauthorized-project" },
+    })
+    assert.equal(response.statusCode, 401, `${prefix}/projects must reject anonymous writes`)
+  }
+
+  assert.equal(await pathExists(projectDir("unauthorized-project")), false)
+})
+
+test("encoded API routes preserve login, sessions and public health checks", async () => {
+  clearRateLimits()
+  const health = await app.inject({ method: "GET", url: "/%61pi/health?probe=1" })
+  assert.equal(health.statusCode, 200)
+  assert.equal(health.json().ok, true)
+
+  const anonymous = await app.inject({ method: "GET", url: "/%61pi/auth/me" })
+  assert.equal(anonymous.statusCode, 401)
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/%61pi/auth/login?source=test",
+    payload: { email: "security@example.com", password },
+  })
+  assert.equal(response.statusCode, 200)
+  const cookie = sessionCookie(response)
+  const users = await app.inject({ method: "GET", url: "/%61pi/%75sers", headers: { cookie } })
+  assert.equal(users.statusCode, 200)
+  assert.equal(users.json().users[0].email, "security@example.com")
+  assert.equal("hash" in users.json().users[0], false)
+
+  const forged = await app.inject({
+    method: "GET",
+    url: "/%61pi/users",
+    headers: { cookie: `${cookie}tampered` },
+  })
+  assert.equal(forged.statusCode, 401)
+})
+
 test("login failures are rate limited", async () => {
   clearRateLimits()
 

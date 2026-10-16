@@ -84,3 +84,28 @@ test("API token protects APIs when password auth is disabled", async () => {
   assert.equal(loginWithToken.statusCode, 200)
   assert.equal(loginWithToken.json().user.authMode, "api-token")
 })
+
+test("API token auth protects encoded API reads and writes", async () => {
+  for (const prefix of ["/api", "/%61pi", "/a%70i", "/ap%69", "/%61%70%69"]) {
+    const url = `${prefix}/users?limit=1`
+    for (const headers of [{}, { authorization: "Bearer invalid-token" }]) {
+      const response = await app.inject({ method: "GET", url, headers })
+      assert.equal(response.statusCode, 401, url)
+    }
+
+    const write = await app.inject({
+      method: "POST",
+      url: `${prefix}/projects`,
+      payload: { name: "Unauthorized project", slug: "unauthorized-project" },
+    })
+    assert.equal(write.statusCode, 401)
+
+    for (const headers of [
+      { authorization: "Bearer test-api-token" },
+      { "x-devsync-token": "test-api-token" },
+    ]) {
+      const response = await app.inject({ method: "GET", url, headers })
+      assert.equal(response.statusCode, 200, url)
+    }
+  }
+})

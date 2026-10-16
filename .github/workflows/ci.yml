@@ -7,15 +7,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
@@ -54,3 +61,86 @@ jobs:
       - name: Build frontend
         working-directory: web
         run: npm run build
+
+  docker:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      IMAGE_NAME: caporro/devsync
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Validate release version
+        run: |
+          node --input-type=module <<'JS'
+          import fs from "node:fs"
+          const { version } = JSON.parse(fs.readFileSync("package.json", "utf8"))
+          const web = JSON.parse(fs.readFileSync("web/package.json", "utf8"))
+          if (version !== web.version) throw new Error("Backend and frontend versions must match")
+          if (process.env.GITHUB_REF.startsWith("refs/tags/v") && process.env.GITHUB_REF_NAME !== `v${version}`) {
+            throw new Error(`Release tag must be v${version}`)
+          }
+          JS
+
+      - name: Setup QEMU for ARM64
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+        with:
+          platforms: arm64
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=semver,pattern={{version}}
+
+      - name: Build AMD64 test image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: devsync:test
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=devsync
+
+      - name: Test production image without network access
+        run: |
+          docker run --rm --network none \
+            -e NODE_ENV=test \
+            devsync:test node --test server/src/*.test.js
+
+      - name: Login to Docker Hub
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'caporro/devsync'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build both architectures and publish releases
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'caporro/devsync' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=devsync
+          cache-to: type=gha,mode=max,scope=devsync
