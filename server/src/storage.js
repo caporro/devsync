@@ -1116,9 +1116,15 @@ async function migrateLegacyTaskDir(projectId) {
   const taskReadme = path.join(tasksDir, TASKS_README_FILE)
 
   try {
-    const raw = await safeReadTextFile(legacyReadme)
+    let raw
+    try {
+      raw = await safeReadTextFile(taskReadme)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+      raw = await safeReadTextFile(legacyReadme)
+    }
     const next = raw
-      .replace(/^#\s+Plan\s*$/im, "# Tasks")
+      .replace(/^#[ \t]+Plan[ \t]*$/im, "# Tasks")
       .replace(/\]\((?:plan\/)?([^)]+)\)/g, "]($1)")
 
     await safeWriteTextFile(taskReadme, next)

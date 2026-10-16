@@ -247,19 +247,23 @@ test("project folders without metadata are listed and repaired on write", async 
 })
 
 test("legacy plan folders migrate to tasks folders", async () => {
-  const projectId = "legacy-plan-migration"
-  const root = projectDir(projectId)
+  for (const [suffix, readme] of [["upper", "README.md"], ["lower", "readme.md"]]) {
+    const root = projectDir(`legacy-plan-migration-${suffix}`)
 
-  await fs.mkdir(path.join(root, "plan"), { recursive: true })
-  await fs.writeFile(path.join(root, "project.json"), "{}\n", "utf8")
-  await fs.writeFile(path.join(root, "plan", "README.md"), "# Plan\n\n- [ ] [Do thing](do-thing.md)\n", "utf8")
-  await fs.writeFile(path.join(root, "plan", "do-thing.md"), "# Do thing\n", "utf8")
+    await fs.mkdir(path.join(root, "plan"), { recursive: true })
+    await fs.writeFile(path.join(root, "project.json"), "{}\n", "utf8")
+    await fs.writeFile(path.join(root, "plan", readme), "# Plan\n\n- [ ] [Do thing](plan/do-thing.md)\n", "utf8")
+    await fs.writeFile(path.join(root, "plan", "do-thing.md"), "# Do thing\n", "utf8")
 
-  await ensureDataDir()
+    await ensureDataDir()
 
-  assert.equal(await pathExists(path.join(root, "plan")), false)
-  assert.equal(await pathExists(path.join(root, "tasks")), true)
-  assert.match(await fs.readFile(path.join(root, "tasks", "README.md"), "utf8"), /^# Tasks/m)
+    assert.equal(await pathExists(path.join(root, "plan")), false)
+    assert.equal(await pathExists(path.join(root, "tasks", "do-thing.md")), true)
+    assert.equal(
+      await fs.readFile(path.join(root, "tasks", "README.md"), "utf8"),
+      "# Tasks\n\n- [ ] [Do thing](do-thing.md)\n",
+    )
+  }
 })
 
 test("new projects create resources and work folders", async () => {
