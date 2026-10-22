@@ -1,11 +1,11 @@
-FROM node:24-alpine AS web-build
+FROM node:24.22.1-alpine AS web-build
 WORKDIR /app
 COPY web/package*.json ./web/
 RUN cd web && npm ci
 COPY web ./web
 RUN cd web && npm run build
 
-FROM node:24-alpine
+FROM node:24.22.1-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 ENV DEVSYNC_SELF_HOSTED=true
