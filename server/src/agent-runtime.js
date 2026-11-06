@@ -7,7 +7,7 @@ import { AiToolLogHandler, summarizeToolPayload } from "./ai-logging.js"
 import { resolveChatModel } from "./model-resolver.js"
 import { filesystemPermissions, hasFilesystemTool } from "./runtime-permissions.js"
 import { formatSkillCatalogForPrompt } from "./skills.js"
-import { vaultName } from "./storage.js"
+import { vaultName, documentIndex } from "./storage.js"
 
 function contentToText(content) {
   if (typeof content === "string") {
@@ -120,7 +120,8 @@ class AgentStreamHandler extends BaseCallbackHandler {
     this.toolLogger?.handleToolStart(toolInfo, input, runId, _parentRunId, _tags, _metadata, runName)
   }
 
-  handleToolEnd(output, runId) {
+  async handleToolEnd(output, runId) {
+    await documentIndex.reconcile()
     this.eventSink?.("tool_end", {
       runId,
       output: summarizeToolPayload(output),
@@ -196,7 +197,7 @@ export async function runAgent({ agent, projectId, messages, skills = [], eventS
         })),
       },
       {
-        callbacks: eventSink || log ? [new AgentStreamHandler(eventSink, log, { agentId: agent.id, projectId: projectId ?? null })] : [],
+        callbacks: [new AgentStreamHandler(eventSink, log, { agentId: agent.id, projectId: projectId ?? null })],
       }
     )
 
@@ -218,5 +219,7 @@ export async function runAgent({ agent, projectId, messages, skills = [], eventS
       error: safeError(error),
     }, "agent run failed")
     throw error
+  } finally {
+    await documentIndex.reconcile()
   }
 }

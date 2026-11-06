@@ -27,4 +27,12 @@ describe("markdown safety", () => {
       "bad image",
     ].join("\n"))
   })
+
+  it("accepts stable document links and translates only valid document URIs", () => {
+    expect(safeMarkdownHref("/d/a1b2c")).toBe("/d/a1b2c")
+    expect(safeMarkdownHref("devsync://document/a1b2c")).toBe("/d/a1b2c")
+    expect(safeMarkdownHref("devsync://document/../../secret")).toBeNull()
+    expect(safeMarkdownHref("devsync://document/abcde/extra")).toBeNull()
+    expect(sanitizeMarkdownLinks("[Analysis](devsync://document/a1b2c)")).toBe("[Analysis](/d/a1b2c)")
+  })
 })

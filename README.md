@@ -141,6 +141,39 @@ npm run dev:web
 
 Use `.env` in the repository root.
 
+### Develop with Docker Compose
+
+Requires Docker Compose 2.24 or newer. Start the development stack with:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+Open `http://127.0.0.1:5173`. The frontend proxies API and MCP requests to the backend; the backend is also available at `http://127.0.0.1:4000`.
+
+This standalone configuration uses Node 24.22.1, mounts the checkout, restarts the backend with Node watch mode, and runs Vite with hot reload. Frontend polling is enabled for bind mounts. The existing `docker-compose.yml` and production image are unchanged.
+
+Backend and frontend dependencies are installed inside separate Docker volumes on first startup. Later starts reuse them; after changing `package.json` or a lockfile, run:
+
+```bash
+docker compose -f docker-compose.dev.yml restart server web
+```
+
+The launcher reinstalls only the packages whose manifest, lockfile or runtime changed. An npm download cache is also kept in Docker. Host `node_modules` directories are hidden by these mounts.
+
+The backend loads an optional root `.env` for model keys and authentication settings. Development defaults use local-only ports, `AUTH_MODE=none`, and the dedicated `data/devsync-dev-vault/` vault; Git repository bootstrap is disabled in this stack. Use `DEVSYNC_DEV_VAULT_NAME` to select another vault explicitly. The frontend URL is used for document share links.
+
+Optional overrides in `.env` or your shell:
+
+```env
+DEVSYNC_DEV_WEB_PORT=5173
+DEVSYNC_DEV_API_PORT=4000
+DEVSYNC_DEV_DATA_DIR=./data
+DEVSYNC_DEV_VAULT_NAME=devsync-dev-vault
+```
+
+Stop the stack with `docker compose -f docker-compose.dev.yml down`. Vault data remains in the local data folder and installed dependencies stay in Docker volumes. Native development commands remain available.
+
 ## Production Deploy
 
 For production, use only the Docker image, persistent storage, password auth, and HTTPS.
@@ -491,12 +524,22 @@ MCP tools:
 - `get_project`;
 - `search_files`;
 - `read_file`;
+- `create_document`;
+- `update_document`;
 - `list_tasks`;
 - `read_task`;
 - `create_task`;
 - `update_task`;
 - `toggle_task`;
 - `delete_task`.
+
+Documents can be published to project `resources/` or `work/`, or a shared `docs/<folder>/` directory. Each Markdown document has a permanent five-character ID (`0-9 a-z`) in its frontmatter and a shareable UI link at `/d/<id>`. `read_file` accepts an ID, an HTTP share URL, `devsync://document/<id>`, or the existing project-relative path parameters.
+
+Search uses SQLite FTS5 through Node's built-in `node:sqlite`, ranks by BM25, and requires every query word to match. It covers project notes, resources, work, tasks, activity logs and shared docs, with excerpts and filters for project, type, tag and author. Files remain the source of truth; the SQLite cache is rebuildable and excluded from Git.
+
+MCP writes record the authenticated token owner's identity. `update_document` requires the `revision` returned by `read_file` as `expectedRevision`, rejecting stale updates. Deprecated `*_plan_item` MCP aliases have been removed.
+
+Details, migration and examples: [documents and search](docs/reference/documents.md).
 
 ## Operate
 

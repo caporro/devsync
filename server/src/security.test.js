@@ -5,6 +5,7 @@ import path from "node:path"
 import { after, test } from "node:test"
 import { createPasswordHash } from "./auth.js"
 import { clearRateLimits } from "./rate-limit.js"
+import { parseFrontmatter } from "./markdown-definitions.js"
 
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "devsync-security-"))
 const webDist = path.join(tempRoot, "web-dist")
@@ -127,7 +128,7 @@ async function patchJson(url, cookie, body = { content: "# changed\n" }) {
 
 test("password auth protects encoded API reads and writes", async () => {
   for (const prefix of ["/api", "/%61pi", "/a%70i", "/ap%69", "/%61%70%69"]) {
-    for (const route of ["/users", "/%75sers", "/projects", "/system-log"]) {
+    for (const route of ["/users", "/%75sers", "/projects", "/system-log", "/search", "/documents"]) {
       const response = await app.inject({ method: "GET", url: `${prefix}${route}?limit=1` })
       assert.equal(response.statusCode, 401, `${prefix}${route} must require a session`)
       assert.deepEqual(response.json(), { error: "Unauthorized" })
@@ -171,6 +172,17 @@ test("encoded API routes preserve login, sessions and public health checks", asy
     headers: { cookie: `${cookie}tampered` },
   })
   assert.equal(forged.statusCode, 401)
+})
+
+test("password sessions cannot authorize cross-origin writes or login", async () => {
+  const cookie = await login()
+  const headers = jsonHeaders({ cookie, host: "localhost:4000", origin: "https://attacker.example" })
+  for (const url of ["/api/projects", "/%61pi/projects", "/api/auth/login"]) {
+    const response = await app.inject({ method: "POST", url, headers, payload: { name: "Cross-site project", email: "security@example.com", password } })
+    assert.equal(response.statusCode, 403, url)
+  }
+  const response = await app.inject({ method: "GET", url: "/api/projects", headers: { cookie, host: "localhost:4000", origin: "http://localhost:4000" } })
+  assert.equal(response.statusCode, 200)
 })
 
 test("login failures are rate limited", async () => {
@@ -260,8 +272,8 @@ test("legacy plan folders migrate to tasks folders", async () => {
     assert.equal(await pathExists(path.join(root, "plan")), false)
     assert.equal(await pathExists(path.join(root, "tasks", "do-thing.md")), true)
     assert.equal(
-      await fs.readFile(path.join(root, "tasks", "README.md"), "utf8"),
-      "# Tasks\n\n- [ ] [Do thing](do-thing.md)\n",
+      parseFrontmatter(await fs.readFile(path.join(root, "tasks", "README.md"), "utf8")).body,
+      "# Tasks\n\n- [ ] [Do thing](do-thing.md)",
     )
   }
 })
@@ -915,8 +927,12 @@ test("save_generated_markdown does not overwrite existing files", async () => {
   await generatedTool.invoke({ fileName: "report.md", content: "first" })
   await generatedTool.invoke({ fileName: "report.md", content: "second" })
 
-  assert.equal(await fs.readFile(path.join(projectDir(projectId), "work", "report.md"), "utf8"), "first\n")
-  assert.equal(await fs.readFile(path.join(projectDir(projectId), "work", "report-1.md"), "utf8"), "second\n")
+  const first = parseFrontmatter(await fs.readFile(path.join(projectDir(projectId), "work", "report.md"), "utf8"))
+  const second = parseFrontmatter(await fs.readFile(path.join(projectDir(projectId), "work", "report-1.md"), "utf8"))
+  assert.equal(first.body, "first")
+  assert.equal(second.body, "second")
+  assert.match(first.data.id, /^[0-9a-z]{5}$/)
+  assert.notEqual(first.data.id, second.data.id)
 })
 
 test("ai tool logging summarizes payloads without raw content or secrets", () => {

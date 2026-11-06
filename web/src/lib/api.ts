@@ -8,6 +8,8 @@ import type {
   CreateTaskRequest,
   DocsDetails,
   DocsSummary,
+  DocumentRecord,
+  DocumentSearchResult,
   GitActionResult,
   MentionInboxPage,
   MyTaskGroup,
@@ -364,6 +366,18 @@ export async function sendAgentMessage(
 
 export async function getDocsFolder(docId: string) {
   return jsonRequest<DocsDetails>(`/api/docs/${docId}`)
+}
+
+export async function readDocument(location: { ref?: string; projectId?: string; docId?: string; path?: string }) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(location)) if (value) query.set(key, value)
+  return jsonRequest<DocumentRecord>(`/api/documents?${query}`)
+}
+
+export async function searchDocuments(filters: { query: string; projectId?: string; type?: string; tag?: string; author?: string }) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value)
+  return jsonRequest<{ items: DocumentSearchResult[] }>(`/api/search?${query}`)
 }
 
 export async function getAppReadme() {

@@ -9,6 +9,9 @@ data/<vault>/
   vault-plan.json
   config/
     skills.json
+  .devsync/
+    .gitignore
+    search.sqlite
   skills/
     project-status/
       SKILL.md
@@ -55,6 +58,7 @@ data/runtime/<vault>/chats/
 | `skills/` | Vault Assistant skills. |
 | `automations/` | Global automations. |
 | `docs/` | Team documentation not tied to a single project. |
+| `.devsync/search.sqlite` | Derived SQLite FTS5 search index and document ID-to-path map. Excluded from Git; rebuildable from Markdown files. |
 | `projects/` | Projects. |
 
 ## Project
@@ -81,6 +85,8 @@ data/runtime/<vault>/chats/
 Assistant resolution details: [assistant.md](assistant.md).
 
 ## Legacy Compatibility
+
+Markdown documents in project README/resources/work/tasks/logs and shared docs receive an `id` frontmatter field with five lowercase alphanumeric characters. The ID is preserved across edits and moves. See [documents and search](documents.md) for initialization and reindexing.
 
 The code supports some legacy paths:
 

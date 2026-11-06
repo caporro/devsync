@@ -5,6 +5,7 @@ import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import { appendMentionEvents } from "./mentions.js"
 import { appendSystemLogEvent } from "./system-log.js"
+import { createDocumentIndex, withDocumentFields, withDocumentBody } from "./document-index.js"
 
 const PROJECT_FILE = "project.json"
 const PLANNING_FILE = "vault-plan.json"
@@ -33,13 +34,14 @@ function resolveVaultName() {
   return name
 }
 
-const legacyDataDir = process.env.DEVSYNC_DATA_DIR
+const legacyDataDir = process.env.DEVSYNC_DATA_DIR?.trim() || undefined
 
 export const vaultName = resolveVaultName()
 export const dataRootDir = path.resolve(process.env.DEVSYNC_DATA_ROOT ?? path.join(process.cwd(), "data"))
 export const vaultDir = path.resolve(legacyDataDir ? path.dirname(legacyDataDir) : path.join(dataRootDir, vaultName))
 export const dataDir = path.resolve(legacyDataDir ?? path.join(vaultDir, "projects"))
 export const docsDir = path.join(vaultDir, "docs")
+export const documentIndex = createDocumentIndex({ vaultDir, projectsDir: dataDir, docsDir })
 const planningPath = path.join(vaultDir, PLANNING_FILE)
 const legacyGanttPath = path.join(vaultDir, LEGACY_GANTT_FILE)
 
@@ -308,23 +310,24 @@ async function assertRealPathInside(root, target, message = "Invalid file path")
 }
 
 async function ensureSafeDir(target) {
+  if (!pathInside(vaultDir, target)) throw storagePathError()
+  // Validate and create each ancestor before descending. Recursive mkdir on a
+  // child of an existing symlink can create directories outside the vault.
+  if (target !== vaultDir) await ensureSafeDir(path.dirname(target))
+  let stat
   try {
-    const stat = await fs.lstat(target)
-
-    if (stat.isSymbolicLink()) {
-      throw storagePathError()
-    }
-
-    if (!stat.isDirectory()) {
-      throw Object.assign(new Error("Not a directory"), { statusCode: 400 })
-    }
+    stat = await fs.lstat(target)
   } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error
+    if (error.code !== "ENOENT") throw error
+    try {
+      await fs.mkdir(target, { recursive: target === vaultDir })
+    } catch (cause) {
+      if (cause.code !== "EEXIST") throw cause
     }
+    stat = await fs.lstat(target)
   }
-
-  await fs.mkdir(target, { recursive: true })
+  if (stat.isSymbolicLink()) throw storagePathError()
+  if (!stat.isDirectory()) throw Object.assign(new Error("Not a directory"), { statusCode: 400 })
   await assertRealPathInside(vaultDir, target)
 }
 
@@ -373,19 +376,23 @@ async function safeReadBuffer(target) {
   return fs.readFile(target)
 }
 
-async function safeWriteTextFile(target, content) {
+async function safeWriteTextFile(target, content, options = {}) {
   await assertSafeWritableFile(vaultDir, target)
+  if (documentIndex.recognizes(target)) return documentIndex.write(target, content, options)
   await fs.writeFile(target, content, "utf8")
+  return content
 }
 
 async function safeAppendTextFile(target, content) {
   await assertSafeWritableFile(vaultDir, target)
+  if (documentIndex.recognizes(target)) return documentIndex.write(target, content, { append: true })
   await fs.appendFile(target, content, "utf8")
 }
 
 async function safeUnlinkFile(target) {
   await assertSafeExistingFile(vaultDir, target)
   await fs.unlink(target)
+  if (documentIndex.recognizes(target)) await documentIndex.reconcile()
 }
 
 async function safeReadStream(target) {
@@ -396,6 +403,7 @@ async function safeReadStream(target) {
 async function safeUploadStream(target, input) {
   await assertSafeWritableFile(vaultDir, target)
   await pipeline(input, createWriteStream(target, { flags: "wx" }))
+  if (documentIndex.recognizes(target)) await documentIndex.reconcile()
 }
 
 async function readJson(filePath) {
@@ -811,39 +819,37 @@ async function listProjectFolders(projectId, dirName) {
 }
 
 async function listDocFiles(docId) {
-  const dir = docPath(docId)
-  const entries = await fs.readdir(dir, { withFileTypes: true })
-  const files = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile())
-      .map(async (entry) => {
-        const fullPath = path.join(dir, entry.name)
-        const stat = await fs.stat(fullPath)
-        let title = null
-
-        if (path.extname(entry.name).toLowerCase() === ".md") {
-          try {
-            title = titleFromMarkdown(parseFrontmatter(await safeReadTextFile(fullPath)).body)
-          } catch {
-            title = null
-          }
-        }
-
-        return {
-          name: entry.name,
-          path: docRelative(docId, fullPath),
-          kind: "docs",
-          size: stat.size,
-          title,
-          updatedAt: stat.mtime.toISOString(),
-        }
+  const root = docPath(docId)
+  const files = []
+  async function visit(directory) {
+    await assertRealPathInside(vaultDir, directory)
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name)
+      if (entry.isSymbolicLink()) throw storagePathError()
+      if (entry.isDirectory()) {
+        await visit(fullPath)
+        continue
+      }
+      if (!entry.isFile()) continue
+      const stat = await fs.stat(fullPath)
+      let title = null
+      let id = null
+      if (isMarkdownName(entry.name)) {
+        const parsed = parseFrontmatter(await safeReadTextFile(fullPath))
+        title = String(parsed.fields.title ?? "").trim() || titleFromMarkdown(parsed.body)
+        id = parsed.fields.id
+      }
+      files.push({
+        name: entry.name, path: docRelative(docId, fullPath), kind: "docs", size: stat.size,
+        title, ...(id ? { id, url: `/d/${id}` } : {}), updatedAt: stat.mtime.toISOString(),
       })
-  )
-
+    }
+  }
+  await visit(root)
   return files.sort((left, right) => {
-    if (left.name === "README.md") return -1
-    if (right.name === "README.md") return 1
-    return left.name.localeCompare(right.name)
+    if (left.path === "README.md") return -1
+    if (right.path === "README.md") return 1
+    return left.path.localeCompare(right.path)
   })
 }
 
@@ -858,7 +864,7 @@ function yamlValue(value) {
 function serializeFrontmatter(fields = {}) {
   return Object.entries(fields)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
-    .map(([key, value]) => `${key}: ${yamlValue(Array.isArray(value) ? value.join(", ") : value)}`)
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? JSON.stringify(value) : yamlValue(value)}`)
     .join("\n")
 }
 
@@ -879,6 +885,12 @@ function parseFrontmatter(raw) {
       continue
     }
 
+    if (item[2].startsWith("[")) {
+      try {
+        const value = JSON.parse(item[2])
+        if (Array.isArray(value)) { fields[item[1]] = value; continue }
+      } catch { /* Keep existing scalar handling for legacy metadata. */ }
+    }
     fields[item[1]] = item[2].replace(/^"(.*)"$/, "$1").replace(/\\"/g, "\"").replace(/\\\\/g, "\\")
   }
 
@@ -1143,10 +1155,11 @@ export async function ensureTaskIndex(projectId) {
   const target = taskIndexPath(projectId)
 
   try {
-    if ((await safeReadTextFile(target)) === content) {
+    const existing = await safeReadTextFile(target)
+    if (parseFrontmatter(existing).body.trim() === parseFrontmatter(content).body.trim()) {
       return {
         path: `tasks/${TASKS_README_FILE}`,
-        content,
+        content: existing,
       }
     }
   } catch (error) {
@@ -1757,6 +1770,7 @@ export async function updateProject(projectId, input) {
     }
 
     await fs.rename(projectPath(projectId), nextRoot)
+    await documentIndex.reconcile()
   }
 
   await writeProjectMetadata(nextProjectId, metadata)
@@ -2001,9 +2015,13 @@ function normalizeTaskDeadline(value) {
 
 function sanitizeTaskFields(fields = {}) {
   return {
+    id: fields.id,
     title: String(fields.title ?? "").trim(),
     createdAt: String(fields.createdAt ?? "").trim(),
     createdBy: String(fields.createdBy ?? "").trim(),
+    lastEdited: fields.lastEdited,
+    lastEditor: fields.lastEditor,
+    tags: fields.tags,
     owner: String(fields.owner ?? "").trim(),
     deadline: normalizeTaskDeadline(fields.deadline),
   }
@@ -2111,7 +2129,7 @@ export async function createTask(projectId, input) {
   }
 }
 
-async function updateTaskFieldsFromIndex(projectId, item) {
+async function updateTaskFieldsFromIndex(projectId, item, input = {}) {
   const title = String(item?.title ?? "").trim()
   const owner = String(item?.owner ?? "").trim()
   const deadline = normalizeTaskDeadline(item?.deadline)
@@ -2133,6 +2151,8 @@ async function updateTaskFieldsFromIndex(projectId, item) {
     title: nextTitle,
     owner,
     deadline,
+    lastEditor: input.author ?? input.editor ?? "team",
+    lastEdited: nowIso(),
   })
 
   if (content === before) {
@@ -2167,7 +2187,7 @@ export async function updateTaskIndex(projectId, input = {}) {
       : await readTaskIndexItems(projectId)
 
   const taskUpdateDetails = (
-    await Promise.all(requestedItems.filter((item) => item.path).map((item) => updateTaskFieldsFromIndex(projectId, item)))
+    await Promise.all(requestedItems.filter((item) => item.path).map((item) => updateTaskFieldsFromIndex(projectId, item, input)))
   ).filter((detail) => detail && detail.path)
 
   await Promise.all(taskUpdateDetails.map((detail) =>
@@ -2188,7 +2208,7 @@ export async function updateTaskIndex(projectId, input = {}) {
   )
 
   const files = await listProjectFiles(projectId, "tasks")
-  const content = buildTaskIndexContent(files, requestedItems)
+  const content = withDocumentFields(buildTaskIndexContent(files, requestedItems), { lastEditor: input.author ?? input.editor ?? "team", lastEdited: nowIso() })
   const target = taskIndexPath(projectId)
   const existingRaw = await safeReadTextFile(target).catch((error) => {
     if (error.code === "ENOENT") return ""
@@ -2433,6 +2453,7 @@ export async function moveProjectEntry(projectId, input = {}) {
 
   await assertRealPathInside(vaultDir, targetParent)
   await fs.rename(source, target)
+  await documentIndex.reconcile()
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "file.moved",
@@ -2459,15 +2480,15 @@ function resolveGeneratedFile(projectId, relativePath) {
   return resolveProjectSubdirFile(projectId, relativePath, WORK_DIR, "Only work files can be changed")
 }
 
-export async function deleteArtifact(projectId, relativePath) {
+export async function deleteArtifact(projectId, relativePath, input = {}) {
   await ensureProjectDirs(projectId)
   const fullPath = resolveArtifactFile(projectId, relativePath)
   await safeUnlinkFile(fullPath)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.deleted",
-    source: "storage",
-    actor: "team",
+    source: input.source ?? "storage",
+    actor: input.author ?? "team",
     projectId,
     target: projectRelative(projectId, fullPath),
     summary: `Deleted resource ${path.basename(fullPath)}`,
@@ -2479,7 +2500,7 @@ export async function deleteArtifact(projectId, relativePath) {
   }
 }
 
-export async function deleteTask(projectId, relativePath) {
+export async function deleteTask(projectId, relativePath, input = {}) {
   await ensureProjectDirs(projectId)
   await ensureTaskIndex(projectId)
   const fullPath = resolveTaskFile(projectId, relativePath)
@@ -2488,8 +2509,8 @@ export async function deleteTask(projectId, relativePath) {
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "task.deleted",
-    source: "storage",
-    actor: "team",
+    source: input.source ?? "storage",
+    actor: input.author ?? "team",
     projectId,
     target: projectRelative(projectId, fullPath),
     summary: `Deleted task ${path.basename(fullPath)}`,
@@ -2524,6 +2545,7 @@ export async function renameArtifact(projectId, relativePath, input = {}) {
 
   await assertSafeWritableFile(vaultDir, target)
   await fs.rename(fullPath, target)
+  await documentIndex.reconcile()
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "artifact.renamed",
@@ -2621,14 +2643,14 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
   const lastEditor =
     String(input.author ?? input.editor ?? incoming.fields.lastEditor ?? existing.fields.lastEditor ?? existing.fields.creator ?? "team").trim() ||
     "team"
-  const content = markdownWithFrontmatter(incoming.body, {
+  let content = markdownWithFrontmatter(incoming.body, {
     ...existing.fields,
     ...incoming.fields,
     lastEdited,
     lastEditor,
   })
 
-  await safeWriteTextFile(fullPath, content)
+  content = await safeWriteTextFile(fullPath, content, { expectedRevision: input.expectedRevision })
   await touchProject(projectId)
   await appendMentionEventsForWrite(projectId, projectRelative(projectId, fullPath), existingRaw, content, input)
 
@@ -2681,11 +2703,11 @@ export async function updateTask(projectId, relativePath, input = {}) {
     deadline: incoming.fields.deadline === undefined ? existingFields.deadline : incoming.fields.deadline,
   })
 
-  const content = taskContent(title, body, nextFields)
+  let content = taskContent(title, body, { ...nextFields, lastEdited: nowIso(), lastEditor: input.author ?? input.editor ?? "team" })
   const previousOwner = existingFields.owner
   const nextOwner = nextFields.owner
 
-  await safeWriteTextFile(fullPath, content)
+  content = await safeWriteTextFile(fullPath, content, { expectedRevision: input.expectedRevision })
   await ensureTaskIndex(projectId)
   await touchProject(projectId)
   await appendSystemLogEvent({
@@ -2714,7 +2736,7 @@ export async function updateTask(projectId, relativePath, input = {}) {
   }
 }
 
-export async function toggleTask(projectId, relativePath, done) {
+export async function toggleTask(projectId, relativePath, done, input = {}) {
   await ensureProjectDirs(projectId)
   await ensureTaskIndex(projectId)
 
@@ -2742,12 +2764,12 @@ export async function toggleTask(projectId, relativePath, done) {
     throw Object.assign(new Error(`Task not found: ${fileName}`), { statusCode: 404 })
   }
 
-  await safeWriteTextFile(taskIndexPath(projectId), content)
+  await safeWriteTextFile(taskIndexPath(projectId), withDocumentFields(content, { lastEditor: input.author ?? "team", lastEdited: nowIso() }))
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "task.toggled",
-    source: "storage",
-    actor: "team",
+    source: input.source ?? "storage",
+    actor: input.author ?? "team",
     projectId,
     target: normalizedPath,
     summary: `Toggled task ${fileName}`,
@@ -2843,41 +2865,104 @@ export async function readDocFile(docId, relativePath) {
   }
 }
 
+export async function readDocument(input = {}) {
+  if (input.ref) return documentIndex.read(input.ref)
+  if (Boolean(input.projectId) === Boolean(input.docId)) {
+    throw Object.assign(new Error("Specify ref, or exactly one of projectId/docId with path"), { statusCode: 400 })
+  }
+  if (typeof input.path !== "string" || !input.path) throw Object.assign(new Error("Document path is required"), { statusCode: 400 })
+  const target = input.projectId ? resolveProjectFile(input.projectId, input.path) : resolveDocFile(input.docId, input.path)
+  await assertSafeExistingFile(vaultDir, target)
+  return documentIndex.byPath(target)
+}
+
+export async function createDocument(input = {}) {
+  if (Boolean(input.projectId) === Boolean(input.docId)) {
+    throw Object.assign(new Error("Specify exactly one of projectId or docId"), { statusCode: 400 })
+  }
+  const title = String(input.title ?? "").trim()
+  const content = String(input.content ?? "").trim()
+  if (!title || !content) throw Object.assign(new Error("Title and content are required"), { statusCode: 400 })
+  let directory
+  if (input.projectId) {
+    await ensureProjectDirs(input.projectId)
+    const area = input.area ?? RESOURCES_DIR
+    if (![RESOURCES_DIR, WORK_DIR].includes(area)) throw Object.assign(new Error("Document area must be resources or work"), { statusCode: 400 })
+    directory = await ensureProjectSubdir(input.projectId, area, input.folder)
+  } else {
+    assertDocId(input.docId)
+    directory = docPath(input.docId)
+    await ensureSafeDir(directory)
+    const folder = String(input.folder ?? "").replaceAll("\\", "/")
+    if (folder.split("/").some((part) => part === ".." || part === ".")) throw storagePathError()
+    for (const part of folder.split("/").filter(Boolean)) {
+      directory = path.join(directory, part)
+      await ensureSafeDir(directory)
+    }
+  }
+  const creator = String(input.author ?? "team")
+  const timestamp = nowIso()
+  const parsed = parseFrontmatter(content)
+  const markdown = markdownDocument(title, parsed.body.replace(/^#\s+.*(?:\r?\n|$)/, "").trim(), {
+    type: "text", creator, created: timestamp, lastEditor: creator, lastEdited: timestamp, tags: normalizeList(input.tags),
+  })
+  let target
+  for (let attempt = 0; attempt < 100; attempt++) {
+    target = await uniquePathWithNumberSuffix(directory, `${dateStamp()}-${slugify(title)}.md`)
+    try {
+      await safeWriteTextFile(target, markdown, { createOnly: true })
+      break
+    } catch (error) {
+      if (error.code !== "EEXIST" || attempt === 99) throw error
+    }
+  }
+  if (input.projectId) {
+    const relative = projectRelative(input.projectId, target)
+    await appendActivityEntry(input.projectId, { author: creator, kind: "artifact", artifactPath: relative, title: `Added ${title}`, content: `Added document [${markdownLinkLabel(title)}](../${relative}).` })
+    await touchProject(input.projectId)
+    await appendMentionEventsForWrite(input.projectId, relative, "", await safeReadTextFile(target), input)
+  }
+  await appendSystemLogEvent({ action: "document.created", source: input.source ?? "storage", actor: creator, projectId: input.projectId, target: path.relative(vaultDir, target), summary: `Created document ${title}` })
+  return documentIndex.byPath(target)
+}
+
+export async function updateDocument(input = {}) {
+  const existing = await readDocument(input)
+  if (typeof input.content !== "string") throw Object.assign(new Error("Content is required"), { statusCode: 400 })
+  if (input.title !== undefined && !String(input.title).trim()) throw Object.assign(new Error("Title must not be empty"), { statusCode: 400 })
+  const target = existing.projectId ? resolveProjectFile(existing.projectId, existing.path) : resolveDocFile(existing.docId, existing.path)
+  if (existing.kind === "logs") throw Object.assign(new Error("Activity logs are append-only"), { statusCode: 400 })
+  const incoming = parseFrontmatter(input.content)
+  const body = input.title === undefined ? incoming.body : `# ${String(input.title).trim()}\n\n${incoming.body.replace(/^#\s+.*(?:\r?\n|$)/, "").trim()}`
+  const fields = { lastEditor: input.author ?? "team", lastEdited: nowIso() }
+  if (input.title !== undefined) fields.title = String(input.title).trim()
+  if (input.tags !== undefined) fields.tags = normalizeList(input.tags)
+  if (existing.kind === "tasks" && !isTaskIndexPath(existing.path)) {
+    await updateTask(existing.projectId, existing.path, { ...input, content: withDocumentFields(withDocumentBody(existing.content, body), fields) })
+  } else {
+    if (existing.kind === "tasks") throw Object.assign(new Error("Use task tools to update the task index"), { statusCode: 400 })
+    await safeWriteTextFile(target, withDocumentFields(withDocumentBody(existing.content, body), fields), { expectedRevision: input.expectedRevision })
+    if (existing.projectId) {
+      await touchProject(existing.projectId)
+      await appendMentionEventsForWrite(existing.projectId, existing.path, existing.content, input.content, input)
+    }
+  }
+  await appendSystemLogEvent({ action: "document.updated", source: input.source ?? "storage", actor: input.author ?? "team", projectId: existing.projectId, target: path.relative(vaultDir, target), summary: `Updated document ${existing.id}` })
+  return documentIndex.byPath(target)
+}
+
+export async function writeProjectMarkdownFile(projectId, relativePath, content, input = {}) {
+  const target = resolveProjectFile(projectId, relativePath)
+  if (!relativePath.startsWith("work/")) throw storagePathError()
+  await safeWriteTextFile(target, withDocumentFields(content, { creator: input.author ?? "agent", created: nowIso(), lastEditor: input.author ?? "agent", lastEdited: nowIso() }), { createOnly: true })
+  return documentIndex.byPath(target)
+}
+
 export async function createDocFileStream(docId, relativePath) {
   return safeReadStream(resolveDocFile(docId, relativePath))
 }
 
-export async function searchFiles({ projectId, query }) {
-  const projects = projectId ? [await getProject(projectId)] : await listProjects()
-  const needle = String(query ?? "").toLowerCase()
-  const results = []
-
-  for (const project of projects) {
-    const detail = project.files ? project : await getProject(project.id)
-    const files = [...detail.files.resources, ...detail.files.logs, ...detail.files.work, ...(detail.files.tasks ?? [])]
-
-    for (const file of files) {
-      const nameMatches = file.name.toLowerCase().includes(needle)
-      let contentMatches = false
-
-      if (!nameMatches && file.name.endsWith(".md")) {
-        try {
-          const raw = await readProjectFile(project.id, file.path)
-          contentMatches = raw.content.toLowerCase().includes(needle)
-        } catch {
-          contentMatches = false
-        }
-      }
-
-      if (!needle || nameMatches || contentMatches) {
-        results.push({
-          projectId: project.id,
-          projectName: project.name,
-          ...file,
-        })
-      }
-    }
-  }
-
-  return results.slice(0, 100)
+export async function searchFiles(options = {}) {
+  await ensureDataDir()
+  return documentIndex.search(options)
 }

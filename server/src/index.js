@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import Fastify from "fastify"
 import { registerAgentRoutes } from "./agent-routes.js"
 import { createAuth } from "./auth.js"
+import { createRequestGuard } from "./request-security.js"
 import { ensureVaultGit, gitPull, gitPush } from "./git.js"
 import { createDevsyncMcpServer } from "./mcp-server.js"
 import {
@@ -26,11 +27,13 @@ import {
   addLog,
   addTextArtifact,
   createTask,
+  createDocument,
   createProject,
   createProjectFolder,
   createDocFileStream,
   createProjectFileStream,
   dataDir,
+  documentIndex,
   deleteArtifact,
   deleteTask,
   ensureDataDir,
@@ -44,8 +47,11 @@ import {
   listProjects,
   moveProjectEntry,
   readDocFile,
+  readDocument,
   readProjectFile,
   saveUpload,
+  searchFiles,
+  updateDocument,
   updateExcalidrawArtifact,
   updateGeneratedMarkdown,
   updateTaskIndex,
@@ -67,6 +73,7 @@ const webDist = path.resolve(
 )
 const apiToken = process.env.DEVSYNC_API_TOKEN
 const auth = createAuth()
+const requestGuard = createRequestGuard({ authMode: auth.mode, publicUrl: process.env.DEVSYNC_PUBLIC_URL, allowedOrigins: process.env.DEVSYNC_ALLOWED_ORIGINS, bindHost: host })
 const INLINE_DOWNLOAD_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".pdf", ".png", ".webp"])
 const RATE_LIMIT_WINDOW_MS = Number(process.env.DEVSYNC_RATE_LIMIT_WINDOW_MS ?? 10 * 60 * 1000)
 const LOGIN_USER_LIMIT = Number(process.env.DEVSYNC_LOGIN_USER_LIMIT ?? 8)
@@ -116,6 +123,14 @@ function currentApiUser(request) {
   }
 
   return auth.currentUser(request)
+}
+
+function actorForUser(user) {
+  return String(user?.email || user?.username || "team")
+}
+
+function requestAttribution(request) {
+  return { author: actorForUser(currentApiUser(request)), source: "api" }
 }
 
 function bearerToken(request) {
@@ -325,20 +340,27 @@ async function updateProjectTaskLegacyToggle(request, reply) {
     await toggleTask(
       request.params.projectId,
       String(request.query.path ?? ""),
-      request.body?.done
+      request.body?.done,
+      requestAttribution(request)
     )
   )
 }
 
 async function deleteProjectTaskLegacy(request, reply) {
-  reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? "")))
+  reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? ""), requestAttribution(request)))
 }
 
 await ensureDataDir()
 
-app.addHook("onRequest", (_request, reply, done) => {
+app.addHook("onRequest", (request, reply, done) => {
   for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
     reply.header(header, value)
+  }
+
+  const rejection = requestGuard(request)
+  if (rejection) {
+    reply.code(403).send({ error: rejection })
+    return
   }
 
   done()
@@ -350,8 +372,18 @@ if (process.env.NODE_ENV !== "test") {
     app.log.warn({ gitBootstrap }, "vault git bootstrap failed")
   }
 
+  await documentIndex.reconcile()
   startAutomationScheduler(app.log)
 }
+
+const documentRefresh = process.env.NODE_ENV === "test" ? null : setInterval(() => {
+  void documentIndex.reconcile().catch((error) => app.log.error({ error }, "document index reconciliation failed"))
+}, 30000)
+documentRefresh?.unref()
+app.addHook("onClose", async () => {
+  if (documentRefresh) clearInterval(documentRefresh)
+  await documentIndex.close()
+})
 
 app.register(fastifyMultipart, {
   limits: {
@@ -362,7 +394,15 @@ app.register(fastifyMultipart, {
 app.addHook("preHandler", (request, reply, done) => {
   // Match the router's resolved route, including percent-encoded URL variants.
   if (request.routeOptions.url?.startsWith("/api/")) {
-    requireAuth(request, reply, done)
+    requireAuth(request, reply, (error) => {
+      const route = request.routeOptions.url
+      if (!error && request.body && typeof request.body === "object" && !Array.isArray(request.body) &&
+        ["/api/projects", "/api/documents", "/api/planning"].some((prefix) => route.startsWith(prefix))) {
+        const actor = actorForUser(currentApiUser(request))
+        Object.assign(request.body, { author: actor, editor: actor, creator: actor, createdBy: actor, source: "api" })
+      }
+      done(error)
+    })
     return
   }
 
@@ -392,7 +432,7 @@ app.route({
       return
     }
 
-    const server = createDevsyncMcpServer()
+    const server = createDevsyncMcpServer({ user: mcpUser, baseUrl: process.env.DEVSYNC_PUBLIC_URL || `${request.protocol}://${request.host}` })
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     })
@@ -580,6 +620,28 @@ app.get("/api/projects", async () => ({
   items: await listProjects(),
 }))
 
+app.get("/api/search", async (request, reply) => {
+  try { reply.send({ items: await searchFiles(request.query) }) }
+  catch (error) { sendError(reply, error) }
+})
+
+app.get("/api/documents", async (request, reply) => {
+  try { reply.send(await readDocument(request.query)) }
+  catch (error) { sendError(reply, error) }
+})
+
+app.post("/api/documents", async (request, reply) => {
+  try { reply.code(201).send(await createDocument(request.body ?? {})) }
+  catch (error) { sendError(reply, error) }
+})
+
+app.patch("/api/documents", async (request, reply) => {
+  try {
+    if (typeof request.body?.expectedRevision !== "string") throw Object.assign(new Error("expectedRevision from the last read is required"), { statusCode: 400 })
+    reply.send(await updateDocument(request.body))
+  } catch (error) { sendError(reply, error) }
+})
+
 app.get("/api/docs", async () => ({
   items: await listDocs(),
 }))
@@ -754,7 +816,7 @@ app.post("/api/projects/:projectId/resources/upload", async (request, reply) => 
   try {
     const file = await request.file()
     const resource = await saveUpload(request.params.projectId, file, {
-      author: file?.fields?.author?.value,
+      author: actorForUser(currentApiUser(request)),
       folder: file?.fields?.folder?.value,
       logActivity: file?.fields?.logActivity?.value !== "false",
     })
@@ -887,7 +949,7 @@ app.patch("/api/projects/:projectId/work/content", async (request, reply) => {
 
 app.delete("/api/projects/:projectId/resources", async (request, reply) => {
   try {
-    reply.send(await deleteArtifact(request.params.projectId, String(request.query.path ?? "")))
+    reply.send(await deleteArtifact(request.params.projectId, String(request.query.path ?? ""), requestAttribution(request)))
   } catch (error) {
     sendError(reply, error)
   }

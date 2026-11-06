@@ -12,6 +12,19 @@ Main environment variables.
 | `DEVSYNC_WEB_DIST` | `web/dist` | Frontend build directory. |
 | `DEVSYNC_SELF_HOSTED` | Docker: `true` | If true, default auth becomes password. |
 
+## Docker Development
+
+These settings apply to the standalone `docker-compose.dev.yml` stack.
+
+| Variable | Default | Use |
+| --- | --- | --- |
+| `DEVSYNC_DEV_WEB_PORT` | `5173` | Frontend host port, bound to `127.0.0.1`. Also used for document share links. |
+| `DEVSYNC_DEV_API_PORT` | `4000` | Backend host port, bound to `127.0.0.1`. Internal API port remains 4000. |
+| `DEVSYNC_DEV_DATA_DIR` | `./data` | Local folder mounted at `/data`. |
+| `DEVSYNC_DEV_VAULT_NAME` | `devsync-dev-vault` | Dedicated development vault; overrides the normal vault name in this stack. |
+| `DEVSYNC_API_PROXY_TARGET` | `http://127.0.0.1:4000` | Vite API/MCP proxy target. Compose sets `http://server:4000`. |
+| `DEVSYNC_WEB_POLLING` | Docker: `true`, native: unset | Enable Vite polling for source changes across bind mounts. Set `false` to use native filesystem events. |
+
 ## Auth
 
 | Variable | Default | Use |
@@ -50,6 +63,8 @@ The CLI vault overrides `DEVSYNC_VAULT_NAME`.
 | Variable | Default | Use |
 | --- | --- | --- |
 | `DEVSYNC_API_TOKEN` | empty | Static bearer token for API/MCP. Prefer personal MCP tokens. |
+| `DEVSYNC_PUBLIC_URL` | request origin | Public HTTP(S) origin for MCP share links and trusted browser requests, e.g. `https://devsync.example.com`. Also allows its hostname in anonymous local mode. Set behind a reverse proxy; stdio returns relative links when unset. |
+| `DEVSYNC_ALLOWED_ORIGINS` | empty | Additional trusted HTTP(S) browser origins, comma-separated, with exact scheme/host/port matching and no wildcards. Does not bypass authentication or enable CORS. |
 | `DEVSYNC_RATE_LIMIT_WINDOW_MS` | `600000` | Rate limit window. |
 | `DEVSYNC_LOGIN_USER_LIMIT` | `8` | Login attempts per user. |
 | `DEVSYNC_LOGIN_IP_LIMIT` | `30` | Login attempts per IP. |

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises"
 
 function unquote(value) {
+  const trimmed = String(value).trim()
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try { return JSON.parse(trimmed) } catch { /* Accept ordinary YAML scalars too. */ }
+  }
   return String(value).trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")
 }
 
@@ -12,6 +16,10 @@ function parseFrontmatterValue(value) {
   }
 
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const values = JSON.parse(trimmed)
+      if (Array.isArray(values)) return values
+    } catch { /* YAML also permits unquoted inline list values. */ }
     return trimmed
       .slice(1, -1)
       .split(",")

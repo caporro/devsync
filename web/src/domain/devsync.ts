@@ -17,6 +17,7 @@ export type ProjectSummary = {
 }
 
 export type ProjectFile = {
+  id?: string
   name: string
   path: string
   kind: "resources" | "logs" | "work" | "tasks" | "docs"
@@ -28,6 +29,28 @@ export type ProjectFile = {
   done?: boolean
   createdAt?: string | null
   updatedAt: string
+}
+
+export type DocumentRecord = {
+  id: string
+  projectId: string | null
+  docId: string | null
+  path: string
+  kind: string
+  name: string
+  title: string
+  author: string
+  tags: string[]
+  url: string
+  ref: string
+  revision: string
+  updatedAt: string
+  content: string
+}
+
+export type DocumentSearchResult = Omit<DocumentRecord, "content"> & {
+  excerpt: string
+  score: number
 }
 
 export type ProjectFolder = {

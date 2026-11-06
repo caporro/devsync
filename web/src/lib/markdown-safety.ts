@@ -50,6 +50,8 @@ export function markdownUserMentionId(url: string) {
 }
 
 export function safeMarkdownHref(value: string) {
+  const reference = value.trim().match(/^(?:\/d\/|devsync:\/\/documents?\/)([0-9a-z]{5})$/)
+  if (reference) return `/d/${reference[1]}`
   const href = markdownUrlToken(value)
   if (!href || hasUnsafeHrefCharacter(href)) {
     return null

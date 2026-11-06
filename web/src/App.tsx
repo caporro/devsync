@@ -30,6 +30,7 @@ import {
   PanelLeftOpenIcon,
   Pdf01Icon,
   Settings05Icon,
+  Search01Icon,
   SourceCodeIcon,
   TextBoldIcon,
   Txt01Icon,
@@ -37,6 +38,7 @@ import {
   ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons"
 
+import { DocumentSearch } from "@/components/document-search"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatThought } from "@/components/chat-thought"
 import type { ThoughtRun, ThoughtStep } from "@/components/chat-thought"
@@ -143,6 +145,7 @@ import {
   logout,
   markMyInboxRead,
   readDocsFile,
+  readDocument,
   readFile,
   createProjectFolder,
   moveProjectEntry,
@@ -193,8 +196,9 @@ const PlanningView = lazy(() =>
   }))
 )
 
-type MainView = "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "planning"
+type MainView = "document" | "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "planning"
 type AppRoute = {
+  documentId?: string | null
   mainView: MainView
   projectId: string | null
   docId: string | null
@@ -400,6 +404,10 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
   const parts = pathname.split("/").filter(Boolean)
   const query = new URLSearchParams(search)
 
+  if (parts[0] === "d" && /^[0-9a-z]{5}$/.test(parts[1] ?? "")) {
+    return { ...emptyRoute("document"), documentId: parts[1] }
+  }
+
   if (parts[0] === "projects" && parts[1]) {
     const projectId = decodePathPart(parts[1])
     const section = parts[2] ?? "activity"
@@ -495,6 +503,7 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
 }
 
 function buildAppPath(route: AppRoute) {
+  if (route.mainView === "document" && route.documentId) return `/d/${route.documentId}`
   if (route.mainView === "docs") {
     if (!route.docId) {
       return "/docs"
@@ -4145,6 +4154,8 @@ function WorkspaceApp({
   const planningActionsRef = useRef<PlanningActions | null>(null)
   const isLoadingOlderRef = useRef(false)
   const initialRoute = useMemo(() => parseAppRoute(), [])
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(initialRoute.documentId ?? null)
+  const [documentSearchOpen, setDocumentSearchOpen] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialRoute.projectId)
   const [selectedDocId, setSelectedDocId] = useState<string | null>(initialRoute.docId)
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(initialRoute.artifactPath)
@@ -4261,6 +4272,11 @@ function WorkspaceApp({
   })
   const project = projectQuery.data ?? selectedProject
   const currentAuthor = currentUser.name || currentUser.email || "team"
+  const documentQuery = useQuery({
+    queryKey: ["document", selectedDocumentId],
+    queryFn: () => readDocument({ ref: selectedDocumentId! }),
+    enabled: mainView === "document" && Boolean(selectedDocumentId),
+  })
   const docsFolderQuery = useQuery({
     queryKey: ["docs-folder", selectedDocId],
     queryFn: () => getDocsFolder(selectedDocId!),
@@ -4310,6 +4326,7 @@ function WorkspaceApp({
 
       agentEventSourceRef.current?.close()
       agentEventSourceRef.current = null
+      setSelectedDocumentId(route.documentId ?? null)
       setSelectedProjectId(route.projectId)
       setSelectedDocId(route.docId)
       setSelectedArtifactPath(route.artifactPath)
@@ -4331,13 +4348,14 @@ function WorkspaceApp({
   }, [])
 
   useEffect(() => {
-    const needsProject = !["agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)
+    const needsProject = !["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)
     if (needsProject && !selectedProjectId && projects.length > 0) {
       return
     }
 
     const nextPath = buildAppPath({
       mainView,
+      documentId: selectedDocumentId,
       projectId: selectedProjectId,
       docId: selectedDocId,
       artifactPath: selectedArtifactPath,
@@ -4355,6 +4373,7 @@ function WorkspaceApp({
     }
   }, [
     mainView,
+    selectedDocumentId,
     selectedProjectId,
     selectedDocId,
     selectedArtifactPath,
@@ -4367,7 +4386,7 @@ function WorkspaceApp({
   ])
 
   useEffect(() => {
-    if (["agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)) {
+    if (["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)) {
       return
     }
 
@@ -5857,6 +5876,25 @@ function WorkspaceApp({
     }
   }
 
+  async function handleCopyDocumentLink() {
+    try {
+      const location = mainView === "document" ? { ref: selectedDocumentId! }
+        : mainView === "docs" ? { docId: selectedDocId!, path: selectedDocFilePath || "README.md" }
+        : { projectId: selectedProjectId!, path: mainView === "artifact" ? selectedArtifactPath! : mainView === "generated-file" ? selectedGeneratedPath! : selectedTaskPath! }
+      const document = await readDocument(location)
+      await navigator.clipboard.writeText(new URL(document.url, window.location.origin).href)
+      setMessage({ type: "ok", text: "Document link copied" })
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Could not copy document link" })
+    }
+  }
+
+  const canShareDocument = mainView === "document" ||
+    (mainView === "docs" && Boolean(selectedDocId) && /\.md$/i.test(selectedDocFilePath || "README.md")) ||
+    (mainView === "artifact" && /\.md$/i.test(selectedArtifactPath || "")) ||
+    (mainView === "generated-file" && /\.md$/i.test(selectedGeneratedPath || "")) ||
+    (mainView === "task" && /\.md$/i.test(selectedTaskPath || ""))
+
   const myTaskGroups = myTasksQuery.data?.items ?? []
   const inboxItems = inboxQuery.data?.items ?? []
   const newsEntries = newsQuery.data?.items ?? []
@@ -5878,7 +5916,7 @@ function WorkspaceApp({
   const drawingFullscreenActive = selectedArtifactIsExcalidraw && drawingFullscreen
   const planningFullscreenActive = mainView === "planning" && planningFullscreen
   const immersiveViewActive = drawingFullscreenActive || planningFullscreenActive
-  const isGlobalView = ["docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
+  const isGlobalView = ["document", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
   const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedTask
   const artifactQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedArtifactPath],
@@ -6330,11 +6368,27 @@ function WorkspaceApp({
           immersiveViewActive ? "rounded-none border-0 shadow-none" : "rounded-[28px] border border-border/60 shadow-sm"
         )}>
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <DocumentSearch
+            open={documentSearchOpen}
+            onOpenChange={setDocumentSearchOpen}
+            projects={projects}
+            onSelect={(document) => guardedNavigation(() => {
+              setSelectedDocumentId(document.id)
+              setSelectedProjectId(null)
+              setSelectedDocId(null)
+              setSelectedArtifactPath(null)
+              setSelectedGeneratedPath(null)
+              setSelectedTaskPath(null)
+              setSelectedDocFilePath(null)
+              setMainView("document")
+              setDocumentSearchOpen(false)
+            }, { mainView: "document" })}
+          />
           <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-background px-3 md:px-4">
             {immersiveViewActive ? null : <SidebarTrigger />}
             <div className="min-w-0 flex-1">
               <div className="truncate text-[15px] font-semibold text-foreground">
-                {selectedArtifactIsExcalidraw && selectedArtifact
+                {mainView === "document" ? documentQuery.data?.title || "Document" : selectedArtifactIsExcalidraw && selectedArtifact
                   ? drawingStatus?.title || displayFileTitle(selectedArtifact)
                   : markdownHeaderStatus
                     ? markdownHeaderStatus.title
@@ -6361,6 +6415,12 @@ function WorkspaceApp({
                     : "Devsync"}
               </div>
             </div>
+            <Button onClick={() => setDocumentSearchOpen(true)} size="icon" title="Search documents" type="button" variant="ghost">
+              <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+            </Button>
+            {canShareDocument ? <Button onClick={() => void handleCopyDocumentLink()} size="icon" title="Copy document link" type="button" variant="ghost">
+              <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
+            </Button> : null}
             {selectedArtifactIsExcalidraw && selectedArtifact ? (
               <div className="flex shrink-0 items-center gap-2">
                 <span className="hidden text-xs text-muted-foreground sm:inline">
@@ -6590,7 +6650,21 @@ function WorkspaceApp({
                   ref={activityScrollRef}
                 >
                   <Suspense fallback={<div className="text-sm text-muted-foreground">Loading...</div>}>
-                    {mainView === "docs" ? (
+                    {mainView === "document" ? (
+                      documentQuery.isError ? <div className="text-sm text-destructive">{documentQuery.error.message}</div> : <section>
+                        {documentQuery.data ? <div className="mb-4 text-xs text-muted-foreground">
+                          {documentQuery.data.projectId || `docs/${documentQuery.data.docId}`} / {documentQuery.data.path}
+                          {documentQuery.data.author ? ` · ${documentQuery.data.author}` : ""}
+                        </div> : null}
+                        <MarkdownViewer content={documentQuery.data?.content} isLoading={documentQuery.isLoading} onOpenProjectFile={(path) => {
+                          if (documentQuery.data?.projectId) handleOpenProjectFileLink(path, documentQuery.data.projectId)
+                        }} resolveUrl={(url) => {
+                          const document = documentQuery.data
+                          if (!document) return url
+                          return document.projectId ? projectMarkdownAssetUrl(document.projectId, url) : docsMarkdownAssetUrl(document.docId!, document.path, url)
+                        }} />
+                      </section>
+                    ) : mainView === "docs" ? (
                     selectedDocFile ? (
                       isImageFile(selectedDocFile.name) ? (
                         <section className="mx-auto max-w-4xl">

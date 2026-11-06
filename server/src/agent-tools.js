@@ -16,6 +16,7 @@ import {
   slugify,
   toggleTask,
   updateTask,
+  writeProjectMarkdownFile,
 } from "./storage.js"
 import { appendMentionEvents } from "./mentions.js"
 import { readSkill } from "./skills.js"
@@ -227,11 +228,11 @@ function createSaveGeneratedMarkdownTool(scope) {
       }
 
       await ensureProjectDirs(scope.projectId)
-      const { root, target, relative } = await uniqueGeneratedPath(scope.projectId, fileName || title)
+      const { root, relative } = await uniqueGeneratedPath(scope.projectId, fileName || title)
       assertWritePath(scope, "save_generated_markdown", relative)
       const markdown = `${String(content).trim()}\n`
       await fs.mkdir(root, { recursive: true })
-      await fs.writeFile(target, markdown, "utf8")
+      const document = await writeProjectMarkdownFile(scope.projectId, relative, markdown, { author: "agent" })
       await appendSystemLogEvent({
         action: "generated_markdown.saved",
         source: "agent-tool",
@@ -251,6 +252,8 @@ function createSaveGeneratedMarkdownTool(scope) {
       })
 
       return {
+        id: document.id,
+        url: document.url,
         path: relative,
         message: "Work markdown saved.",
       }
