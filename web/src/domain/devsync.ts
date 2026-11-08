@@ -141,39 +141,6 @@ export type MentionInboxPage = {
   userId: string
 }
 
-export type PlanningGanttTask = {
-  id?: string | number
-  start?: string
-  end?: string
-  duration?: number
-  text?: string
-  status?: string
-  external_id?: string
-  link?: string
-  details?: string
-  progress?: number
-  type?: string
-  parent?: string | number
-  open?: boolean
-  projectId?: string | null
-  taskPath?: string | null
-  [key: string]: unknown
-}
-
-export type PlanningGanttLink = {
-  id?: string | number
-  source: string | number
-  target: string | number
-  type: "s2s" | "s2e" | "e2s" | "e2e"
-  lag?: number
-}
-
-export type PlanningGanttData = {
-  tasks: PlanningGanttTask[]
-  links: PlanningGanttLink[]
-  updatedAt: string
-}
-
 export type ProjectDetails = ProjectSummary & {
   activity: ActivityLogPage
   files: {

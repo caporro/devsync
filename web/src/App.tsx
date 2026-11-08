@@ -18,7 +18,6 @@ import {
   FileLinkIcon,
   FileScriptIcon,
   FileUnknownIcon,
-  FilterIcon,
   FloppyDiskIcon,
   Folder01Icon,
   FolderAddIcon,
@@ -26,16 +25,12 @@ import {
   GitBranchIcon,
   Key01Icon,
   MinimizeScreenIcon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
   Pdf01Icon,
   Settings05Icon,
   Search01Icon,
   SourceCodeIcon,
   TextBoldIcon,
   Txt01Icon,
-  ZoomInAreaIcon,
-  ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons"
 
 import { DocumentSearch } from "@/components/document-search"
@@ -54,11 +49,6 @@ import {
 } from "@/components/file-command-menu-utils"
 import type { CommandMenuItem } from "@/components/file-command-menu-utils"
 import type { MarkdownArtifactEditorActions, MarkdownArtifactEditorStatus } from "@/components/markdown-artifact-editor"
-import {
-  PLANNING_COLUMN_OPTIONS,
-  PLANNING_DEFAULT_COLUMN_IDS,
-} from "@/components/planning-types"
-import type { PlanningActions, PlanningStatus } from "@/components/planning-types"
 import { VoiceInputButton } from "@/components/voice-input-button"
 import type { ExcalidrawArtifactActions, ExcalidrawArtifactStatus } from "@/components/excalidraw-artifact-editor"
 import { useTheme } from "@/components/theme-provider"
@@ -90,13 +80,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -129,7 +114,6 @@ import {
   getAppReadme,
   getDocsFolder,
   getNews,
-  getPlanningGantt,
   getProject,
   getProjectActivity,
   getSystemLog,
@@ -152,7 +136,6 @@ import {
   updateArtifactContent,
   updateExcalidrawArtifact,
   updateGeneratedContent,
-  updatePlanningGantt,
   updateTaskIndex,
   updateTaskContent,
   updateProject,
@@ -163,7 +146,7 @@ import {
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, PlanningGanttData, ProjectDetails, ProjectFile, ProjectFolder, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
+import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, ProjectDetails, ProjectFile, ProjectFolder, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
 import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
@@ -190,13 +173,8 @@ const MarkdownViewer = lazy(() =>
     default: module.MarkdownViewer,
   }))
 )
-const PlanningView = lazy(() =>
-  import("@/components/planning-view").then((module) => ({
-    default: module.PlanningView,
-  }))
-)
 
-type MainView = "document" | "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git" | "planning"
+type MainView = "document" | "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git"
 type AppRoute = {
   documentId?: string | null
   mainView: MainView
@@ -475,10 +453,6 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     return emptyRoute("news")
   }
 
-  if (parts[0] === "planning") {
-    return emptyRoute("planning")
-  }
-
   if (parts[0] === "system-log") {
     return emptyRoute("system-log")
   }
@@ -523,10 +497,6 @@ function buildAppPath(route: AppRoute) {
 
   if (route.mainView === "news") {
     return "/news"
-  }
-
-  if (route.mainView === "planning") {
-    return "/planning"
   }
 
   if (route.mainView === "system-log") {
@@ -4151,7 +4121,6 @@ function WorkspaceApp({
   const logFileInputRef = useRef<HTMLInputElement | null>(null)
   const drawingActionsRef = useRef<ExcalidrawArtifactActions | null>(null)
   const markdownActionsRef = useRef<MarkdownArtifactEditorActions | null>(null)
-  const planningActionsRef = useRef<PlanningActions | null>(null)
   const isLoadingOlderRef = useRef(false)
   const initialRoute = useMemo(() => parseAppRoute(), [])
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(initialRoute.documentId ?? null)
@@ -4188,8 +4157,6 @@ function WorkspaceApp({
   const [drawingFullscreen, setDrawingFullscreen] = useState(false)
   const [drawingStatus, setDrawingStatus] = useState<ExcalidrawArtifactStatus | null>(null)
   const [markdownStatus, setMarkdownStatus] = useState<MarkdownArtifactEditorStatus | null>(null)
-  const [planningFullscreen, setPlanningFullscreen] = useState(false)
-  const [planningStatus, setPlanningStatus] = useState<PlanningStatus | null>(null)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [taskTitle, setTaskTitle] = useState("")
   const [taskOwner, setTaskOwner] = useState("")
@@ -4293,12 +4260,6 @@ function WorkspaceApp({
     queryFn: () => getSystemLog(200),
     enabled: mainView === "system-log",
   })
-  const planningQuery = useQuery({
-    queryKey: ["planning-gantt"],
-    queryFn: getPlanningGantt,
-    enabled: mainView === "planning",
-    refetchOnWindowFocus: false,
-  })
   const assistantQuery = useQuery({
     queryKey: ["assistant", selectedProjectId ?? "global"],
     queryFn: () => getAssistantConfig(selectedProjectId),
@@ -4348,7 +4309,7 @@ function WorkspaceApp({
   }, [])
 
   useEffect(() => {
-    const needsProject = !["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)
+    const needsProject = !["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView)
     if (needsProject && !selectedProjectId && projects.length > 0) {
       return
     }
@@ -4386,7 +4347,7 @@ function WorkspaceApp({
   ])
 
   useEffect(() => {
-    if (["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView)) {
+    if (["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView)) {
       return
     }
 
@@ -4665,24 +4626,6 @@ function WorkspaceApp({
 
   const handleMarkdownStatusChange = useCallback((status: MarkdownArtifactEditorStatus | null) => {
     setMarkdownStatus(status)
-  }, [])
-
-  const handlePlanningActionsChange = useCallback((actions: PlanningActions | null) => {
-    planningActionsRef.current = actions
-  }, [])
-
-  const handlePlanningStatusChange = useCallback((status: PlanningStatus | null) => {
-    setPlanningStatus(status)
-  }, [])
-
-  const handleOpenProjectFileLinkRef = useRef(handleOpenProjectFileLink)
-
-  useEffect(() => {
-    handleOpenProjectFileLinkRef.current = handleOpenProjectFileLink
-  })
-
-  const handlePlanningOpenProjectFile = useCallback((projectId: string, path: string) => {
-    handleOpenProjectFileLinkRef.current(path, projectId)
   }, [])
 
   function toggleTheme() {
@@ -5377,16 +5320,6 @@ function WorkspaceApp({
     }
   }
 
-  async function handleSavePlanningGantt(data: Pick<PlanningGanttData, "tasks" | "links">) {
-    await run("planning-gantt", async () => {
-      const saved = await updatePlanningGantt(data)
-      if (mainView !== "planning") {
-        queryClient.setQueryData(["planning-gantt"], saved)
-      }
-      await queryClient.invalidateQueries({ queryKey: ["system-log"] })
-    }, { throwOnError: true })
-  }
-
   async function handleLoadOlderActivity() {
     const activity = projectQuery.data?.activity
 
@@ -5914,9 +5847,7 @@ function WorkspaceApp({
       ? markdownStatus
       : null
   const drawingFullscreenActive = selectedArtifactIsExcalidraw && drawingFullscreen
-  const planningFullscreenActive = mainView === "planning" && planningFullscreen
-  const immersiveViewActive = drawingFullscreenActive || planningFullscreenActive
-  const isGlobalView = ["document", "docs", "git", "my-tasks", "inbox", "news", "planning", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
+  const isGlobalView = ["document", "docs", "git", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
   const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedTask
   const artifactQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedArtifactPath],
@@ -5973,16 +5904,6 @@ function WorkspaceApp({
     setDrawingFullscreen(false)
     setDrawingStatus(null)
   }, [selectedArtifactIsExcalidraw])
-
-  useEffect(() => {
-    if (mainView === "planning") {
-      return
-    }
-
-    planningActionsRef.current = null
-    setPlanningFullscreen(false)
-    setPlanningStatus(null)
-  }, [mainView])
 
   async function handleSaveDrawing() {
     await drawingActionsRef.current?.save()
@@ -6250,7 +6171,7 @@ function WorkspaceApp({
       <McpTokensDialog open={mcpTokensOpen} onOpenChange={setMcpTokensOpen} />
 
       <SidebarProvider className="min-h-0 flex-1 overflow-hidden">
-        {immersiveViewActive ? null : (
+        {drawingFullscreenActive ? null : (
         <AppSidebar
           activeView={
             mainView === "generated-file" || (mainView === "placeholder" && placeholderTitle === "work")
@@ -6303,18 +6224,6 @@ function WorkspaceApp({
               setMainView("news")
             })
           }}
-          onOpenPlanning={() => {
-            guardedNavigation(() => {
-              setSelectedDocId(null)
-              setSelectedProjectId(null)
-              setSelectedArtifactPath(null)
-              setSelectedGeneratedPath(null)
-              setSelectedTaskPath(null)
-              setSelectedDocFilePath(null)
-              setPlaceholderTitle("")
-              setMainView("planning")
-            })
-          }}
           onOpenGit={() => {
             guardedNavigation(() => {
               setSelectedDocId(null)
@@ -6362,10 +6271,10 @@ function WorkspaceApp({
           }}
         />
         )}
-        {immersiveViewActive ? null : <SidebarRail />}
+        {drawingFullscreenActive ? null : <SidebarRail />}
         <SidebarInset className={cn(
           "flex min-h-0 overflow-hidden bg-background",
-          immersiveViewActive ? "rounded-none border-0 shadow-none" : "rounded-[28px] border border-border/60 shadow-sm"
+          drawingFullscreenActive ? "rounded-none border-0 shadow-none" : "rounded-[28px] border border-border/60 shadow-sm"
         )}>
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           <DocumentSearch
@@ -6385,7 +6294,7 @@ function WorkspaceApp({
             }, { mainView: "document" })}
           />
           <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-background px-3 md:px-4">
-            {immersiveViewActive ? null : <SidebarTrigger />}
+            {drawingFullscreenActive ? null : <SidebarTrigger />}
             <div className="min-w-0 flex-1">
               <div className="truncate text-[15px] font-semibold text-foreground">
                 {mainView === "document" ? documentQuery.data?.title || "Document" : selectedArtifactIsExcalidraw && selectedArtifact
@@ -6406,8 +6315,6 @@ function WorkspaceApp({
                       ? "Inbox"
                     : mainView === "my-tasks"
                       ? "My tasks"
-                    : mainView === "planning"
-                      ? "Planning"
                     : mainView === "readme"
                       ? "Readme"
                     : project
@@ -6529,98 +6436,6 @@ function WorkspaceApp({
                   </Button>
                 ) : null}
               </div>
-            ) : mainView === "planning" ? (
-              <div className="flex shrink-0 items-center gap-2">
-                <span className="hidden text-xs text-muted-foreground lg:inline">
-                  {busyAction === "planning-gantt" ? "Saving..." : planningStatus?.dirty ? "Unsaved" : "Saved"}
-                </span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      disabled={!planningActionsRef.current || !(planningStatus?.ownerOptions.length)}
-                      title="Filter by owner"
-                      type="button"
-                      variant={planningStatus?.ownerFilter ? "secondary" : "outline"}
-                    >
-                      <HugeiconsIcon icon={FilterIcon} strokeWidth={2} />
-                      <span className="max-w-24 truncate">{planningStatus?.ownerFilter ?? "Owner"}</span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuLabel>Owner filter</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuRadioGroup
-                      onValueChange={(owner) => planningActionsRef.current?.filterByOwner(owner || null)}
-                      value={planningStatus?.ownerFilter ?? ""}
-                    >
-                      <DropdownMenuRadioItem value="">All owners</DropdownMenuRadioItem>
-                      {(planningStatus?.ownerOptions ?? []).map((owner) => (
-                        <DropdownMenuRadioItem key={owner} value={owner}>
-                          {owner}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button disabled={!planningActionsRef.current} title="Step columns" type="button" variant="outline">
-                      Columns
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuLabel>Step columns</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {PLANNING_COLUMN_OPTIONS.map((option) => (
-                      <DropdownMenuCheckboxItem
-                        checked={(planningStatus?.visibleColumns ?? PLANNING_DEFAULT_COLUMN_IDS).includes(option.id)}
-                        disabled={option.required}
-                        key={option.id}
-                        onCheckedChange={() => planningActionsRef.current?.toggleColumn(option.id)}
-                        onSelect={(event) => event.preventDefault()}
-                      >
-                        {option.label}
-                      </DropdownMenuCheckboxItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button
-                  onClick={() => planningActionsRef.current?.zoomOut()}
-                  size="icon"
-                  title="Zoom out"
-                  type="button"
-                  variant="outline"
-                >
-                  <HugeiconsIcon icon={ZoomOutAreaIcon} strokeWidth={2} />
-                </Button>
-                <Button
-                  onClick={() => planningActionsRef.current?.zoomIn()}
-                  size="icon"
-                  title="Zoom in"
-                  type="button"
-                  variant="outline"
-                >
-                  <HugeiconsIcon icon={ZoomInAreaIcon} strokeWidth={2} />
-                </Button>
-                <Button
-                  onClick={() => planningActionsRef.current?.toggleTaskList()}
-                  size="icon"
-                  title={planningStatus?.taskListVisible ? "Hide step list" : "Show step list"}
-                  type="button"
-                  variant="outline"
-                >
-                  <HugeiconsIcon icon={planningStatus?.taskListVisible ? PanelLeftCloseIcon : PanelLeftOpenIcon} strokeWidth={2} />
-                </Button>
-                <Button
-                  onClick={() => setPlanningFullscreen((current) => !current)}
-                  size="icon"
-                  title={planningFullscreenActive ? "Exit fullscreen" : "Fullscreen"}
-                  type="button"
-                  variant="outline"
-                >
-                  <HugeiconsIcon icon={planningFullscreenActive ? MinimizeScreenIcon : FullScreenIcon} strokeWidth={2} />
-                </Button>
-              </div>
             ) : null}
             <Button onClick={toggleTheme} size="icon" title={`Theme: ${theme}`} type="button" variant="ghost">
               <HugeiconsIcon icon={DarkModeIcon} strokeWidth={2} />
@@ -6645,7 +6460,7 @@ function WorkspaceApp({
                 <div
                   className={cn(
                     "min-h-0 flex-1 overflow-y-auto px-5 py-5 md:px-8 md:py-6",
-                    (selectedArtifactIsExcalidraw || mainView === "planning") && "overflow-hidden p-0 md:p-0"
+                    selectedArtifactIsExcalidraw && "overflow-hidden p-0 md:p-0"
                   )}
                   ref={activityScrollRef}
                 >
@@ -6778,16 +6593,6 @@ function WorkspaceApp({
                       unreadCount={inboxQuery.data?.unreadCount ?? 0}
                       onMarkRead={() => void handleMarkInboxRead()}
                       onOpenItem={handleOpenInboxItem}
-                    />
-                  ) : mainView === "planning" ? (
-                    <PlanningView
-                      data={planningQuery.data}
-                      isDark={theme === "dark" || (theme === "system" && document.documentElement.classList.contains("dark"))}
-                      isLoading={planningQuery.isLoading}
-                      onActionsChange={handlePlanningActionsChange}
-                      onOpenProjectFile={handlePlanningOpenProjectFile}
-                      onSave={handleSavePlanningGantt}
-                      onStatusChange={handlePlanningStatusChange}
                     />
                   ) : mainView === "config" ? (
                     <ConfigView
@@ -7187,7 +6992,7 @@ function WorkspaceApp({
                 ) : null}
               </main>
 
-              {immersiveViewActive ? null : mainView === "docs" ? (
+              {drawingFullscreenActive ? null : mainView === "docs" ? (
                 <DocsRail
                   activePath={selectedDocFilePath}
                   files={docFiles}

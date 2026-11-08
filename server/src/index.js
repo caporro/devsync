@@ -39,7 +39,6 @@ import {
   ensureDataDir,
   getActivityLog,
   getDocFolder,
-  getPlanningGantt,
   getProject,
   listNewsEntries,
   listDocs,
@@ -56,7 +55,6 @@ import {
   updateGeneratedMarkdown,
   updateTaskIndex,
   updateMarkdownArtifact,
-  updatePlanningGantt,
   updateTask,
   updateProject,
   toggleTask,
@@ -397,7 +395,7 @@ app.addHook("preHandler", (request, reply, done) => {
     requireAuth(request, reply, (error) => {
       const route = request.routeOptions.url
       if (!error && request.body && typeof request.body === "object" && !Array.isArray(request.body) &&
-        ["/api/projects", "/api/documents", "/api/planning"].some((prefix) => route.startsWith(prefix))) {
+        ["/api/projects", "/api/documents"].some((prefix) => route.startsWith(prefix))) {
         const actor = actorForUser(currentApiUser(request))
         Object.assign(request.body, { author: actor, editor: actor, creator: actor, createdBy: actor, source: "api" })
       }
@@ -674,22 +672,6 @@ app.get("/api/system-log", async (request, reply) => {
 app.get("/api/news", async (request, reply) => {
   try {
     reply.send({ items: await listNewsEntries() })
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
-
-app.get("/api/planning", async (_request, reply) => {
-  try {
-    reply.send(await getPlanningGantt())
-  } catch (error) {
-    sendError(reply, error)
-  }
-})
-
-app.put("/api/planning", async (request, reply) => {
-  try {
-    reply.send(await updatePlanningGantt(request.body ?? {}))
   } catch (error) {
     sendError(reply, error)
   }
@@ -1003,6 +985,9 @@ app.register(fastifyStatic, {
   root: webDist,
   prefix: "/",
 })
+
+// Old bookmarks open the app home after removal of the Planning/Gantt UI.
+app.get("/planning", async (_request, reply) => reply.redirect("/"))
 
 app.setNotFoundHandler((request, reply) => {
   if (request.url.startsWith("/api/")) {

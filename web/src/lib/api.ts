@@ -14,7 +14,6 @@ import type {
   MentionInboxPage,
   MyTaskGroup,
   NewsPage,
-  PlanningGanttData,
   TaskIndexItem,
   ProjectDetails,
   ProjectSummary,
@@ -398,17 +397,6 @@ export async function getSystemLog(limit = 200) {
 
 export async function getNews() {
   return jsonRequest<NewsPage>("/api/news")
-}
-
-export async function getPlanningGantt() {
-  return jsonRequest<PlanningGanttData>("/api/planning")
-}
-
-export async function updatePlanningGantt(body: Pick<PlanningGanttData, "tasks" | "links">) {
-  return jsonRequest<PlanningGanttData>("/api/planning", {
-    method: "PUT",
-    body: JSON.stringify(body),
-  })
 }
 
 export async function gitPull() {

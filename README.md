@@ -539,6 +539,8 @@ Search uses SQLite FTS5 through Node's built-in `node:sqlite`, ranks by BM25, an
 
 MCP writes record the authenticated token owner's identity. `update_document` requires the `revision` returned by `read_file` as `expectedRevision`, rejecting stale updates. Deprecated `*_plan_item` MCP aliases have been removed.
 
+Planning/Gantt has been removed. Tasks, My Tasks and task tools remain available. Existing `vault-plan.json` and `gantt.json` files are preserved unchanged and are no longer read or updated.
+
 Details, migration and examples: [documents and search](docs/reference/documents.md).
 
 ## Operate
@@ -614,7 +616,6 @@ Devsync uses and thanks:
 - Hugeicons;
 - Excalidraw;
 - Milkdown/Crepe;
-- SVAR Gantt;
 - LangChain;
 - DeepAgents;
 - Model Context Protocol SDK.

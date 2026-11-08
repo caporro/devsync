@@ -18,7 +18,6 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AiBrain04Icon,
   BookOpen02Icon,
-  ChartGanttIcon,
   ChartRingIcon,
   CropIcon,
   GitBranchIcon,
@@ -54,7 +53,6 @@ export function AppSidebar({
   onOpenInbox,
   onOpenMyTasks,
   onOpenNews,
-  onOpenPlanning,
   onOpenReadme,
   onOpenSystemLog,
   onOpenMcpTokens,
@@ -77,7 +75,6 @@ export function AppSidebar({
   onOpenInbox?: () => void
   onOpenMyTasks?: () => void
   onOpenNews?: () => void
-  onOpenPlanning?: () => void
   onOpenReadme?: () => void
   onOpenSystemLog?: () => void
   onOpenMcpTokens?: () => void
@@ -97,13 +94,6 @@ export function AppSidebar({
     icon: <HugeiconsIcon icon={CropIcon} strokeWidth={2} />,
   }))
   const navMain = [
-    {
-      title: "Planning",
-      url: "#",
-      icon: <HugeiconsIcon icon={ChartGanttIcon} strokeWidth={2} />,
-      isActive: activeView === "planning",
-      onSelect: onOpenPlanning,
-    },
     {
       title: "News",
       url: "#",

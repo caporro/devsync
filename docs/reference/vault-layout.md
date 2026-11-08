@@ -53,7 +53,7 @@ data/runtime/<vault>/chats/
 | --- | --- |
 | `README.md` | General vault notes. |
 | `assistant.md` | Global Assistant instructions. |
-| `vault-plan.json` | Global planning data. Task records may include string `status`, `external_id`, and `link` fields. `link` can be external or a project-relative `resources/...`, `tasks/...`, or `work/...` path when the task has `projectId`. |
+| `vault-plan.json`, `gantt.json` | Historical Planning/Gantt files, if present. Preserved unchanged; no longer read or updated by Devsync. |
 | `config/skills.json` | Vault skill config, including disabled system skills. |
 | `skills/` | Vault Assistant skills. |
 | `automations/` | Global automations. |
@@ -93,7 +93,6 @@ The code supports some legacy paths:
 - `system.md` as the old global assistant file;
 - `agents.md` as the old project assistant file;
 - `agents/*.md` or `agents/<name>/AGENT.md`;
-- `gantt.json` as the old global planning file;
 - `plan/` as the old task area;
 - `artifacts/` as the old resources area;
 - `generated/` as the old work area.

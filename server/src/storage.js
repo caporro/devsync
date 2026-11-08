@@ -8,8 +8,6 @@ import { appendSystemLogEvent } from "./system-log.js"
 import { createDocumentIndex, withDocumentFields, withDocumentBody } from "./document-index.js"
 
 const PROJECT_FILE = "project.json"
-const PLANNING_FILE = "vault-plan.json"
-const LEGACY_GANTT_FILE = "gantt.json"
 const RESOURCES_DIR = "resources"
 const WORK_DIR = "work"
 const LEGACY_RESOURCES_DIR = "artifacts"
@@ -42,8 +40,6 @@ export const vaultDir = path.resolve(legacyDataDir ? path.dirname(legacyDataDir)
 export const dataDir = path.resolve(legacyDataDir ?? path.join(vaultDir, "projects"))
 export const docsDir = path.join(vaultDir, "docs")
 export const documentIndex = createDocumentIndex({ vaultDir, projectsDir: dataDir, docsDir })
-const planningPath = path.join(vaultDir, PLANNING_FILE)
-const legacyGanttPath = path.join(vaultDir, LEGACY_GANTT_FILE)
 
 function nowIso() {
   return new Date().toISOString()
@@ -409,78 +405,6 @@ async function safeUploadStream(target, input) {
 async function readJson(filePath) {
   const raw = await safeReadTextFile(filePath)
   return JSON.parse(raw)
-}
-
-function normalizeGanttDate(value) {
-  if (!value) {
-    return ""
-  }
-
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10)
-  }
-
-  const raw = String(value).trim()
-  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/)
-  if (match) {
-    return match[1]
-  }
-
-  const parsed = Date.parse(raw)
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : ""
-}
-
-function normalizeGanttTask(input) {
-  const task = { ...(input ?? {}) }
-  const id = task.id === undefined || task.id === null || String(task.id).trim() === ""
-    ? `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    : task.id
-  const duration = Number(task.duration)
-  const progress = Number(task.progress)
-
-  task.id = typeof id === "number" ? id : String(id)
-  task.text = String(task.text ?? task.title ?? "Untitled").trim() || "Untitled"
-  task.status = String(task.status ?? "").trim()
-  task.external_id = String(task.external_id ?? "").trim()
-  task.link = String(task.link ?? "").trim()
-  if (task.start) task.start = normalizeGanttDate(task.start)
-  if (task.end) task.end = normalizeGanttDate(task.end)
-  if (Number.isFinite(duration) && duration >= 0) task.duration = duration
-  if (Number.isFinite(progress)) task.progress = Math.max(0, Math.min(100, progress))
-  if (task.parent !== undefined && task.parent !== null && String(task.parent).trim() !== "") {
-    task.parent = typeof task.parent === "number" ? task.parent : String(task.parent)
-  } else {
-    delete task.parent
-  }
-
-  return task
-}
-
-function normalizeGanttLink(input) {
-  const link = { ...(input ?? {}) }
-
-  if (link.source === undefined || link.target === undefined) {
-    return null
-  }
-
-  const type = ["s2s", "s2e", "e2s", "e2e"].includes(link.type) ? link.type : "e2s"
-  return {
-    ...link,
-    id: link.id === undefined || link.id === null || String(link.id).trim() === ""
-      ? `${link.source}-${link.target}-${type}`
-      : link.id,
-    source: typeof link.source === "number" ? link.source : String(link.source),
-    target: typeof link.target === "number" ? link.target : String(link.target),
-    type,
-  }
-}
-
-function normalizeGanttData(input = {}) {
-  return {
-    tasks: Array.isArray(input.tasks) ? input.tasks.map(normalizeGanttTask) : [],
-    links: Array.isArray(input.links) ? input.links.map(normalizeGanttLink).filter(Boolean) : [],
-    updatedAt: String(input.updatedAt ?? "").trim(),
-  }
 }
 
 function persistedProjectMetadata(metadata) {
@@ -1509,50 +1433,6 @@ export async function ensureDataDir() {
 
     await migrateLegacyTaskDir(entry.name)
   }))
-}
-
-export async function getPlanningGantt() {
-  await ensureDataDir()
-
-  try {
-    return normalizeGanttData(await readJson(planningPath))
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error
-    }
-
-    try {
-      return normalizeGanttData(await readJson(legacyGanttPath))
-    } catch (legacyError) {
-      if (legacyError.code === "ENOENT") {
-        return normalizeGanttData()
-      }
-
-      throw legacyError
-    }
-  }
-}
-
-export async function updatePlanningGantt(input = {}) {
-  await ensureDataDir()
-
-  const data = normalizeGanttData({
-    tasks: input.tasks,
-    links: input.links,
-    updatedAt: nowIso(),
-  })
-
-  await safeWriteTextFile(planningPath, `${JSON.stringify(data, null, 2)}\n`)
-  await appendSystemLogEvent({
-    action: "vault_plan.updated",
-    source: input?.source ?? "storage",
-    actor: input?.author ?? input?.editor ?? "team",
-    projectId: null,
-    target: PLANNING_FILE,
-    summary: `Updated vault plan (${data.tasks.length} tasks)`,
-  })
-
-  return data
 }
 
 export async function listDocs() {
