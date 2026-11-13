@@ -7,6 +7,7 @@ import type { ProjectSummary, ProjectTask, TaskPatch, TaskStatus } from "@/domai
 import type { AuthUser } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { TaskTagFilter, TaskTagLabels } from "@/components/task-tags"
 
 const COLLAPSED_COLUMNS_KEY = "devsync:kanban:collapsed-columns"
 
@@ -58,7 +59,9 @@ export function KanbanBoard({
       console.warn("Could not save Kanban column preferences", error)
     }
   }, [collapsed])
-  const visibleTasks = projectId ? tasks.filter((task) => task.projectId === projectId) : tasks
+  const [tagFilter, setTagFilter] = useState("")
+  const projectTasks = projectId ? tasks.filter((task) => task.projectId === projectId) : tasks
+  const visibleTasks = tagFilter ? projectTasks.filter((task) => task.tags?.includes(tagFilter)) : projectTasks
   const columns = TASK_STATUSES.map((status) => (collapsed.includes(status) ? "3.5rem" : "minmax(160px, 1fr)")).join(
     " "
   )
@@ -111,6 +114,7 @@ export function KanbanBoard({
             value={projectId ?? ""}
             onChange={(event) => {
               resetDrag()
+              setTagFilter("")
               onProjectChange(event.target.value || null)
             }}
           >
@@ -124,6 +128,7 @@ export function KanbanBoard({
               <option value={projectId}>Unavailable project: {projectId}</option>
             ) : null}
           </select>
+          <TaskTagFilter tasks={projectTasks} value={tagFilter} onChange={(tag) => { resetDrag(); setTagFilter(tag) }} />
           <span aria-live="polite" className="text-xs text-muted-foreground">
             {isLoading ? "Loading..." : busy ? "Saving..." : `${visibleTasks.length} tasks`}
           </span>
@@ -212,6 +217,7 @@ export function KanbanBoard({
                       >
                         {task.title || task.name}
                       </button>
+                      <TaskTagLabels tags={task.tags ?? []} />
                       <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                         <p className="break-words">
                           {users.find((user) => user.email === task.owner)?.name || task.owner || "Unassigned"}

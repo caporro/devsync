@@ -10,6 +10,7 @@ import { createDocumentIndex, documentRevision, withDocumentFields, withDocument
 import { taskEvents } from "./task-events.js"
 import { resolveTaskOwner } from "./auth.js"
 import { parseFrontmatter as parseTaskFrontmatter } from "./markdown-definitions.js"
+import { assertNoTaskCommentMarkers, preserveTaskComments, splitTaskComments, withTaskComment } from "./task-comments.js"
 
 const PROJECT_FILE = "project.json"
 const RESOURCES_DIR = "resources"
@@ -169,6 +170,13 @@ function normalizeList(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function taskTags(value = []) {
+  if (!Array.isArray(value) || value.some((tag) => typeof tag !== "string")) {
+    throw Object.assign(new Error("tags must be an array of strings"), { statusCode: 400 })
+  }
+  return [...new Set(normalizeList(value))]
 }
 
 function cleanFileName(input) {
@@ -1790,12 +1798,11 @@ export async function createProject(input) {
   const root = projectPath(projectId)
 
   try {
-    await fs.access(root)
-    throw Object.assign(new Error("Project already exists"), { statusCode: 409 })
+    // Reserve the project directory atomically, including concurrent MCP calls.
+    await fs.mkdir(root)
   } catch (error) {
-    if (error.statusCode === 409) {
-      throw error
-    }
+    if (error.code === "EEXIST") throw Object.assign(new Error("Project already exists"), { statusCode: 409 })
+    throw error
   }
 
   await ensureProjectDirs(projectId)
@@ -2173,6 +2180,7 @@ async function taskRecord(projectId, relativePath) {
   const fullPath = resolveTaskFile(projectId, relativePath)
   const content = await safeReadTextFile(fullPath)
   const fields = parseTaskFrontmatter(content).data
+  const { descriptionContent, comments } = splitTaskComments(content)
   const stat = await fs.stat(fullPath)
   const status = taskStatus(fields.status)
   return {
@@ -2194,15 +2202,19 @@ async function taskRecord(projectId, relativePath) {
     updatedAt: stat.mtime.toISOString(),
     size: stat.size,
     revision: documentRevision(content),
-    content
+    content,
+    descriptionContent,
+    comments
   }
 }
 
 export function createTask(projectId, input = {}) {
   return withTaskLock(projectId, async () => {
+    const tags = taskTags(input.tags)
     await ensureTaskIndexUnlocked(projectId)
     const title = String(input.title ?? "").trim()
     if (!title) throw Object.assign(new Error("Task title is required"), { statusCode: 400 })
+    assertNoTaskCommentMarkers(`${title}\n${String(input.content ?? input.body ?? "")}`)
     const files = await readTaskFiles(projectId)
     const created = nowIso()
     const creator = String(input.createdBy ?? input.author ?? "team").trim() || "team"
@@ -2214,6 +2226,7 @@ export function createTask(projectId, input = {}) {
       lastEdited: created,
       owner: resolveTaskOwner(input.owner),
       deadline: normalizeTaskDeadline(input.deadline),
+      tags,
       status: taskStatus(input.status),
       order: Math.max(-1, ...files.map((file) => file.order)) + 1
     }
@@ -2248,6 +2261,40 @@ export function createTask(projectId, input = {}) {
     await appendMentionEventsForWrite(projectId, task.path, "", task.content, input, "task")
     await publishTaskEvent("task.added", projectId, task, input)
     return task
+  })
+}
+
+export function appendTaskComment(projectId, relativePath, input = {}) {
+  return withTaskLock(projectId, async () => {
+    if (typeof input.content !== "string" || !input.content.trim()) {
+      throw Object.assign(new Error("Comment content is required"), { statusCode: 400 })
+    }
+    const author = String(input.author ?? "team").trim() || "team"
+    if (/[\u0000-\u001f\u007f\u2028\u2029]/u.test(author)) {
+      throw Object.assign(new Error("Comment author must be a single-line name"), { statusCode: 400 })
+    }
+    assertNoTaskCommentMarkers(input.content)
+    resolveTaskFile(projectId, relativePath)
+    if (!(await safeLegacyDir(projectId, ""))) {
+      throw Object.assign(new Error("Project not found"), { statusCode: 404 })
+    }
+    await ensureTaskIndexUnlocked(projectId)
+    const existing = await taskRecord(projectId, relativePath)
+    const comment = { id: randomUUID(), author, createdAt: nowIso(), content: input.content.trim() }
+    const content = withDocumentFields(withTaskComment(existing.content, comment), {
+      lastEditor: author, lastEdited: comment.createdAt
+    })
+    await safeWriteTextFile(resolveTaskFile(projectId, relativePath), content, { expectedRevision: existing.revision })
+    const task = await taskRecord(projectId, relativePath)
+    await touchProject(projectId)
+    await appendSystemLogEvent({
+      action: "task.comment_added", source: input.source ?? "storage", actor: author,
+      authenticatedBy: input.authenticatedBy, projectId, target: task.path,
+      summary: `Commented on task ${task.title}`, metadata: { commentId: comment.id }
+    })
+    await appendMentionEventsForWrite(projectId, task.path, "", comment.content, { ...input, author }, "task")
+    await publishTaskEvent("task.updated", projectId, task, { ...input, author })
+    return { comment, path: task.path, revision: task.revision, task }
   })
 }
 
@@ -2767,8 +2814,9 @@ async function updateTaskUnlocked(projectId, relativePath, input = {}) {
   if (values.status !== undefined) fields.status = taskStatus(values.status)
   if (values.owner !== undefined) fields.owner = resolveTaskOwner(values.owner)
   if (values.deadline !== undefined) fields.deadline = normalizeTaskDeadline(values.deadline)
+  if (input.tags !== undefined) fields.tags = taskTags(input.tags)
   // Order is changed only through reorderTasks, with a revision check for every task.
-  let content = existing.content
+  let content = existing.descriptionContent
   if (typeof input.content === "string") {
     const header = input.content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[0]
     if (header)
@@ -2786,6 +2834,7 @@ async function updateTaskUnlocked(projectId, relativePath, input = {}) {
     const body = parseFrontmatter(content).body
     content = withDocumentBody(content, body.replace(/^#\s+.*$/m, `# ${fields.title}`))
   }
+  content = preserveTaskComments(existing.content, content)
   content = withDocumentFields(content, fields)
   await safeWriteTextFile(resolveTaskFile(projectId, relativePath), content, {
     expectedRevision: input.expectedRevision
@@ -2893,7 +2942,7 @@ function taskListOptions(input) {
     if (value === false || value === "false") return false
     throw Object.assign(new Error(`${name} must be true or false`), { statusCode: 400 })
   }
-  for (const name of ["owner", "createdBy", "updatedSince", "cursor"]) {
+  for (const name of ["owner", "createdBy", "updatedSince", "cursor", "tag"]) {
     if (input[name] !== undefined && typeof input[name] !== "string") {
       throw Object.assign(new Error(`${name} must be a string`), { statusCode: 400 })
     }
@@ -2913,7 +2962,7 @@ function taskListOptions(input) {
   return {
     done: boolean("done"), overdue: boolean("overdue"), compact: boolean("compact", true),
     status: input.status === undefined ? undefined : taskStatus(input.status),
-    owner: input.owner, createdBy: input.createdBy, updatedSince,
+    owner: input.owner, createdBy: input.createdBy, tag: input.tag?.trim() || undefined, updatedSince,
     paged, limit, cursor: input.cursor
   }
 }
@@ -2929,6 +2978,7 @@ export function listTasks(projectId, options = {}) {
         (query.status === undefined || task.status === query.status) &&
         (query.owner === undefined || task.owner === query.owner) &&
         (query.createdBy === undefined || task.createdBy === query.createdBy) &&
+        (query.tag === undefined || task.tags.includes(query.tag)) &&
         (query.overdue === undefined || overdue === query.overdue) &&
         (query.updatedSince === undefined || Date.parse(task.updatedAt) > query.updatedSince)
     })
@@ -2938,7 +2988,7 @@ export function listTasks(projectId, options = {}) {
     // snapshots rather than skipping/duplicating tasks after edits or reorders.
     const snapshot = documentRevision(JSON.stringify({
       projectId, done: query.done, status: query.status, owner: query.owner,
-      createdBy: query.createdBy, overdue: query.overdue, updatedSince: query.updatedSince,
+      createdBy: query.createdBy, tag: query.tag, overdue: query.overdue, updatedSince: query.updatedSince,
       compact: query.compact, today: query.overdue === undefined ? undefined : today,
       tasks: tasks.map((task) => [task.path, task.revision, task.updatedAt])
     }))

@@ -34,6 +34,8 @@ import {
 
 import { ProjectTasksView, TaskStatusSelect, TaskOwnerSelect } from "@/components/project-tasks"
 import { KanbanBoard } from "@/components/kanban-board"
+import { TaskTagsEditor } from "@/components/task-tags"
+import { TaskComments } from "@/components/task-comments"
 import { DocumentSearch } from "@/components/document-search"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatThought } from "@/components/chat-thought"
@@ -99,6 +101,7 @@ import {
   addTextArtifact,
   agentAttachmentUrl,
   createTask,
+  appendTaskComment,
   createAgentThread,
   createMcpToken,
   createProject,
@@ -739,21 +742,49 @@ function SystemLogView({
   events,
   isLoading,
   path,
+  filters,
+  onFilterChange,
+  error,
 }: {
   events: SystemLogEvent[]
   isLoading: boolean
   path?: string
+  filters: { actor: string; authenticatedBy: string }
+  onFilterChange: (filters: { actor: string; authenticatedBy: string }) => void
+  error?: string
 }) {
+  const [actor, setActor] = useState(filters.actor)
+  const [authenticatedBy, setAuthenticatedBy] = useState(filters.authenticatedBy)
   return (
     <section className="mx-auto w-full max-w-5xl">
       <div className="mb-4">
         <h1 className="text-xl font-semibold text-foreground">System Log</h1>
         <div className="mt-1 text-xs text-muted-foreground">{path ?? "system/events.ndjson"}</div>
       </div>
-      {isLoading ? (
+      <form className="mb-4 flex flex-wrap items-end gap-2" onSubmit={(event) => {
+        event.preventDefault()
+        onFilterChange({ actor: actor.trim(), authenticatedBy: authenticatedBy.trim() })
+      }}>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Author
+          <Input aria-label="Filter audit by author" placeholder="Any author" value={actor} onChange={(event) => setActor(event.target.value)} />
+        </label>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Authenticated user
+          <Input aria-label="Filter audit by authenticated user" placeholder="Any user" value={authenticatedBy} onChange={(event) => setAuthenticatedBy(event.target.value)} />
+        </label>
+        <Button type="submit" variant="outline" disabled={isLoading}>Filter</Button>
+        <Button type="button" variant="ghost" onClick={() => {
+          setActor(""); setAuthenticatedBy("")
+          onFilterChange({ actor: "", authenticatedBy: "" })
+        }}>Reset</Button>
+      </form>
+      {error ? (
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+      ) : isLoading ? (
         <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">Loading...</div>
       ) : events.length === 0 ? (
-        <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">No system events yet.</div>
+        <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">{filters.actor || filters.authenticatedBy ? "No events match these filters." : "No system events yet."}</div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border">
           <div className="grid grid-cols-[160px_170px_1fr_180px] gap-3 border-b border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
@@ -770,6 +801,7 @@ function SystemLogView({
                 <span className="min-w-0 truncate text-foreground">
                   {event.summary ?? event.source}
                   {event.actor ? <span className="ml-2 text-muted-foreground">by {event.actor}</span> : null}
+                  {event.authenticatedBy && event.authenticatedBy !== event.actor ? <span className="ml-2 text-muted-foreground">via {event.authenticatedBy}</span> : null}
                   {event.projectId ? <span className="ml-2 text-muted-foreground">in {event.projectId}</span> : null}
                 </span>
                 <span className="truncate text-muted-foreground">{event.target ?? "-"}</span>
@@ -3333,6 +3365,8 @@ function TaskDialog({
   status,
   onStatusChange,
   title,
+  tags,
+  onTagsChange,
   onBodyChange,
   onDeadlineChange,
   onOpenChange,
@@ -3352,6 +3386,8 @@ function TaskDialog({
   status: TaskStatus
   onStatusChange: (status: TaskStatus) => void
   title: string
+  tags: string[]
+  onTagsChange: (tags: string[]) => void
   onBodyChange: (value: string) => void
   onDeadlineChange: (value: string) => void
   onOpenChange: (open: boolean) => void
@@ -3396,6 +3432,7 @@ function TaskDialog({
               type="date"
               value={deadline}
             />
+            <TaskTagsEditor value={tags} disabled={busy} onChange={onTagsChange} />
             <textarea
               className="min-h-32 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
               name="task-body"
@@ -3768,6 +3805,8 @@ function WorkspaceApp({
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("backlog")
   const [taskDeadline, setTaskDeadline] = useState("")
   const [taskBody, setTaskBody] = useState("")
+  const [taskTags, setTaskTags] = useState<string[]>([])
+  const [systemLogFilters, setSystemLogFilters] = useState({ actor: "", authenticatedBy: "" })
   const [configName, setConfigName] = useState("")
   const [configOwner, setConfigOwner] = useState("")
   const [configStatus, setConfigStatus] = useState("")
@@ -3867,8 +3906,8 @@ function WorkspaceApp({
     enabled: mainView === "readme",
   })
   const systemLogQuery = useQuery({
-    queryKey: ["system-log"],
-    queryFn: () => getSystemLog(200),
+    queryKey: ["system-log", systemLogFilters],
+    queryFn: () => getSystemLog(200, systemLogFilters),
     enabled: mainView === "system-log",
   })
   const assistantQuery = useQuery({
@@ -5007,6 +5046,7 @@ function WorkspaceApp({
     setTaskStatus("backlog")
     setTaskDeadline("")
     setTaskBody("")
+    setTaskTags([])
   }
 
   async function handleArtifactSubmit(event: FormEvent<HTMLFormElement>) {
@@ -5201,6 +5241,7 @@ function WorkspaceApp({
         status: taskStatus,
         deadline: taskDeadline,
         body: taskBody,
+        tags: taskTags,
         createdBy: currentAuthor,
       })
 
@@ -5488,6 +5529,10 @@ function WorkspaceApp({
   const taskQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedTaskPath],
     queryFn: () => readTask(selectedProjectId!, selectedTaskPath!),
+    // The displayed editor and its write revision advance together through
+    // explicit refreshes; background reads must not replace an editing base.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     enabled: Boolean(
       selectedProjectId &&
         selectedTaskPath &&
@@ -5640,7 +5685,7 @@ function WorkspaceApp({
     let savedContent = content
     await run("task-content", async () => {
       const saved = await updateTask(selectedProjectId, path, { content }, taskQuery.data!.revision)
-      savedContent = saved.content
+      savedContent = saved.descriptionContent
       queryClient.setQueryData(["project-file", selectedProjectId, path], saved)
       await refresh(selectedProjectId)
     }, { throwOnError: true })
@@ -5657,6 +5702,28 @@ function WorkspaceApp({
       } finally {
         await refresh(projectId)
       }
+    }, { throwOnError: true })
+  }
+
+  async function handleRefreshTaskComments() {
+    if (!selectedProjectId || !selectedTaskPath) return
+    const projectId = selectedProjectId
+    const taskPath = selectedTaskPath
+    await run("task-comments-refresh", async () => {
+      const saved = await readTask(projectId, taskPath)
+      queryClient.setQueryData(["project-file", projectId, taskPath], saved)
+      await refresh(projectId)
+    }, { throwOnError: true })
+  }
+
+  async function handleAppendTaskComment(content: string) {
+    if (!selectedProjectId || !selectedTaskPath) return
+    const projectId = selectedProjectId
+    const taskPath = selectedTaskPath
+    await run("task-comment", async () => {
+      const result = await appendTaskComment(projectId, taskPath, content)
+      queryClient.setQueryData(["project-file", projectId, taskPath], result.task)
+      await refresh(projectId)
     }, { throwOnError: true })
   }
 
@@ -6305,7 +6372,9 @@ function WorkspaceApp({
                     />
                   ) : mainView === "task" && selectedTask ? (
                     isMarkdownFile(selectedTask.name) ? (
-                      taskQuery.isLoading ? (
+                      taskQuery.isError && !taskQuery.data ? (
+                        <div role="alert" className="text-sm text-destructive">{taskQuery.error.message}</div>
+                      ) : taskQuery.isLoading ? (
                         <TextFileView
                           content={undefined}
                           isLoading={taskQuery.isLoading}
@@ -6315,12 +6384,15 @@ function WorkspaceApp({
                           <div className="mx-auto mb-4 flex max-w-3xl flex-wrap gap-2">
                             <TaskStatusSelect value={taskQuery.data?.status ?? selectedTask.status} disabled={Boolean(busyAction) || markdownStatus?.dirty} onChange={(status) => { void handleUpdateTask(taskQuery.data ?? selectedTask, { status }).catch(() => {}) }} />
                             <TaskOwnerSelect value={taskQuery.data?.owner ?? selectedTask.owner ?? ""} users={usersQuery.data?.users ?? [currentUser]} disabled={Boolean(busyAction) || markdownStatus?.dirty} onChange={(owner) => { void handleUpdateTask(taskQuery.data ?? selectedTask, { owner }).catch(() => {}) }} />
+                            <div className="basis-full">
+                              <TaskTagsEditor value={taskQuery.data?.tags ?? selectedTask.tags ?? []} disabled={Boolean(busyAction) || markdownStatus?.dirty} onChange={(tags) => handleUpdateTask(taskQuery.data ?? selectedTask, { tags })} />
+                            </div>
                           </div>
                         <MarkdownArtifactEditor
-                          key={selectedTask.path}
-                          content={taskQuery.data?.content}
+                          key={`${selectedTask.path}:${taskQuery.data?.descriptionContent ?? ""}`}
+                          content={taskQuery.data?.descriptionContent ?? taskQuery.data?.content}
                           isLoading={false}
-                          isSaving={busyAction === "task-content"}
+                          isSaving={Boolean(busyAction)}
                           commandFiles={markdownCommandFiles}
                           commandUsers={commandUsers}
                           path={selectedTask.name}
@@ -6333,6 +6405,16 @@ function WorkspaceApp({
                           onStatusChange={handleMarkdownStatusChange}
                           resolveUrl={resolveMarkdownAssetUrl}
                         />
+                          <TaskComments
+                            key={`${selectedProjectId}:${selectedTask.path}`}
+                            comments={taskQuery.data?.comments ?? []}
+                            disabled={Boolean(busyAction) || !taskQuery.data}
+                            descriptionDirty={Boolean(markdownStatus?.dirty)}
+                            onSubmit={handleAppendTaskComment}
+                            onRefresh={handleRefreshTaskComments}
+                            onOpenProjectFile={handleOpenProjectFileLink}
+                            resolveUrl={resolveMarkdownAssetUrl}
+                          />
                         </div>
                       )
                     ) : isTextFile(selectedTask.name) ? (
@@ -6412,6 +6494,9 @@ function WorkspaceApp({
                       events={systemLogQuery.data?.items ?? []}
                       isLoading={systemLogQuery.isLoading}
                       path={systemLogQuery.data?.path}
+                      filters={systemLogFilters}
+                      onFilterChange={setSystemLogFilters}
+                      error={systemLogQuery.error?.message}
                     />
                   ) : mainView === "chat" ? (
                     <PlaceholderView title="Chat" />
@@ -6811,6 +6896,8 @@ function WorkspaceApp({
           projectId={taskProjectId}
           onProjectChange={setTaskProjectId}
           body={taskBody}
+          tags={taskTags}
+          onTagsChange={setTaskTags}
           deadline={taskDeadline}
           open={taskDialogOpen}
           owner={taskOwner}

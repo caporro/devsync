@@ -7,6 +7,7 @@ import { z } from "zod"
 
 import {
   addLog,
+  appendTaskComment,
   createTask,
   dataDir,
   deleteTask,
@@ -329,14 +330,14 @@ function taskAttribution(scope) {
 
 function createListTasksTool(scope) {
   return tool(
-    async () => {
+    async ({ tag }) => {
       assertTaskScope(scope, "list_tasks")
-      return (await listTasks(scope.projectId)).filter((task) => canReadTask(scope, task.path))
+      return (await listTasks(scope.projectId, { tag })).filter((task) => canReadTask(scope, task.path))
     },
     {
       name: "list_tasks",
       description: "List high-level project tasks.",
-      schema: z.object({})
+      schema: z.object({ tag: z.string().optional().describe("Exact task tag.") })
     }
   )
 }
@@ -377,6 +378,7 @@ function createCreateTaskTool(scope) {
         status: z.enum(TASK_STATUSES).optional(),
         owner: z.string().optional(),
         deadline: z.string().optional(),
+        tags: z.array(z.string()).optional(),
         body: z.string().optional()
       })
     }
@@ -400,9 +402,25 @@ function createUpdateTaskTool(scope) {
         status: z.enum(TASK_STATUSES).optional(),
         owner: z.string().optional(),
         deadline: z.string().optional(),
+        tags: z.array(z.string()).optional(),
         body: z.string().optional(),
         content: z.string().optional()
       })
+    }
+  )
+}
+
+function createAppendTaskCommentTool(scope) {
+  return tool(
+    async ({ path: itemPath, ...input }) => {
+      assertTaskWrite(scope, "append_task_comment", itemPath)
+      const { comment, path, revision } = await appendTaskComment(scope.projectId, itemPath, { ...input, ...taskAttribution(scope) })
+      return { comment, path, revision }
+    },
+    {
+      name: "append_task_comment",
+      description: "Append a comment with author and date in the task Markdown. Concurrent appends are safe; no expectedRevision is required. Existing comments cannot be edited through task updates.",
+      schema: z.object({ path: z.string().min(1), content: z.string().trim().min(1) })
     }
   )
 }
@@ -516,6 +534,7 @@ export function resolveAgentTools(toolNames, scope) {
     read_task: () => createReadTaskTool(scope),
     create_task: () => createCreateTaskTool(scope),
     update_task: () => createUpdateTaskTool(scope),
+    append_task_comment: () => createAppendTaskCommentTool(scope),
     toggle_task: () => createToggleTaskTool(scope),
     delete_task: () => createDeleteTaskTool(scope),
     reorder_tasks: () => createReorderTasksTool(scope),

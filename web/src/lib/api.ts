@@ -17,10 +17,12 @@ import type {
   NewsPage,
   Task,
   TaskRecord,
+  TaskCommentResult,
   TaskPatch,
   ProjectDetails,
   ProjectSummary,
   SystemLogPage,
+  SystemLogFilters,
 } from "@/domain/devsync"
 
 export type AuthUser = {
@@ -398,8 +400,12 @@ export async function getAppReadme() {
   return response.text()
 }
 
-export async function getSystemLog(limit = 200) {
-  return jsonRequest<SystemLogPage>(`/api/system-log?limit=${encodeURIComponent(String(limit))}`)
+export async function getSystemLog(limit = 200, filters: SystemLogFilters = {}) {
+  const search = new URLSearchParams({ limit: String(limit) })
+  for (const [key, value] of Object.entries(filters)) {
+    if (value?.trim()) search.set(key, value.trim())
+  }
+  return jsonRequest<SystemLogPage>(`/api/system-log?${search}`)
 }
 
 export async function getNews() {
@@ -603,6 +609,13 @@ export async function updateGeneratedContent(projectId: string, path: string, co
 
 export async function readTask(projectId: string, path: string) {
   return jsonRequest<TaskRecord>(`/api/projects/${projectId}/tasks/content?path=${encodeURIComponent(path)}`)
+}
+
+export async function appendTaskComment(projectId: string, path: string, content: string) {
+  return jsonRequest<TaskCommentResult>(
+    `/api/projects/${projectId}/tasks/comments?path=${encodeURIComponent(path)}`,
+    { method: "POST", body: JSON.stringify({ content }) }
+  )
 }
 
 export async function updateTask(projectId: string, path: string, changes: TaskPatch, expectedRevision: string) {

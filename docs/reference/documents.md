@@ -57,7 +57,7 @@ Pass this input to `create_document`. For shared docs, use `docId` instead of `p
 
 `read_file` accepts `{ "ref": "a1b2c" }` or the previous `{ "projectId": "my-project", "path": "work/file.md" }` form. It also accepts `docId` plus a docs-relative path.
 
-To call `update_document`, pass `ref` (or location), Markdown `content`, and `expectedRevision` from the latest read. Optional `title` and `tags` replace those fields; omitted fields preserve existing metadata. ID and original creator cannot be supplied or replaced by the client. Concurrent updates using an old revision return a conflict, requiring a fresh read. Activity logs remain append-only; task index edits use task tools.
+To call `update_document`, pass `ref` (or location), Markdown `content`, and `expectedRevision` from the latest read. Optional `title` and `tags` replace those fields; omitted fields preserve existing metadata. ID and original creator cannot be supplied or replaced by the client. Concurrent updates using an old revision return a conflict, requiring a fresh read. Activity logs remain append-only; task index edits use task tools. Task-document updates preserve the managed comments section; use `append_task_comment` for a new reply. Altering existing comments through a generic document update is rejected.
 
 ### Authorship and audit
 
@@ -90,6 +90,24 @@ Use `append_log` for a project diary or update:
 The tool uses the existing activity-log storage, attributes the entry to `agentName` or the authenticated user, and records an `activity_log.appended` audit event with source `mcp` and the server-derived `authenticatedBy`. It returns the entry's ID, author, content, kind and segment path. Entries beyond `DEVSYNC_ACTIVITY_INLINE_MAX_CHARS` (default 800) are saved as Markdown resources and linked from the log; the result includes `artifactPath`. Inserts and segment rotation are serialized per project within the process, preserving unique entry IDs under concurrent requests. Use a single writer process for a vault; separate HTTP/stdio processes do not share the in-process lock.
 
 Like `POST /api/projects/:projectId/logs`, this tool emits `project_log.added` for existing event automations. Logs remain append-only. Task filters and paginated summaries are documented in [tasks](tasks.md).
+
+## Project creation and audit queries
+
+MCP `create_project` uses the same filesystem operation as `POST /api/projects`:
+
+```json
+{ "name": "Agent Hub", "slug": "agent-hub", "tags": ["shared"], "agentName": "Coordinator" }
+```
+
+`name` is required; `slug`, `owner`, `status`, `tags` and `agentName` are optional. As in REST, the project folder ID is derived from `slug` or `name`, and the display name follows that folder ID. The result includes the project metadata and initial file lists. Existing projects return 409, including when two calls concurrently try to create the same project. Creation is audited with the operational author and authenticated identity.
+
+MCP `list_system_log` and `GET /api/system-log` accept optional `actor`, `authenticatedBy`, `action` and `limit` (default 200, maximum 1000). Actor and authenticated-user filters are exact and case-sensitive after trimming query whitespace. All filters combine with AND and are applied before limiting the newest matching events. For example:
+
+```json
+{ "actor": "Custode", "authenticatedBy": "marco@example.com", "limit": 50 }
+```
+
+HTTP: `GET /api/system-log?actor=Custode&authenticatedBy=marco%40example.com&limit=50`. The System Log UI provides separate author/authenticated-user fields and shows the authenticated user alongside a different declared author. Historical events lacking `authenticatedBy` do not match an authenticated-user filter; no identity is inferred from their actor.
 
 ## Search
 

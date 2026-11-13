@@ -489,6 +489,7 @@ Main tools:
 - `read_task`;
 - `create_task`;
 - `update_task`;
+- `append_task_comment`;
 - `toggle_task`;
 - `reorder_tasks`;
 - `delete_task`.
@@ -526,7 +527,9 @@ codex mcp add devsync --url http://127.0.0.1:4000/mcp --bearer-token-env-var DEV
 MCP tools:
 
 - `list_projects`;
+- `create_project`;
 - `get_project`;
+- `list_system_log`;
 - `append_log`;
 - `search_files`;
 - `read_file`;
@@ -536,6 +539,7 @@ MCP tools:
 - `read_task`;
 - `create_task`;
 - `update_task`;
+- `append_task_comment`;
 - `toggle_task`;
 - `reorder_tasks`;
 - `delete_task`.
@@ -547,6 +551,10 @@ Search uses SQLite FTS5 through Node's built-in `node:sqlite`, ranks by BM25, an
 MCP and REST writes accept optional `agentName` as a declared operational author; omitted or blank names use the authenticated user. The audit always keeps the authenticated identity in `authenticatedBy`, alongside the operational `actor`. Original creators remain immutable on edits. See [authorship and audit](docs/reference/documents.md#authorship-and-audit). `update_document` requires the `revision` returned by `read_file` as `expectedRevision`, rejecting stale updates. Deprecated `*_plan_item` MCP aliases have been removed.
 
 Use `append_log` for project diaries and updates; long entries become linked Markdown resources. `list_tasks` supports creator/editor metadata, combined filters and optional `limit`/`cursor` pagination, with compact summaries by default. Existing unpaginated calls retain their response shape. See [task queries and filename repair](docs/reference/tasks.md) and [MCP activity updates](docs/reference/documents.md#activity-updates-over-mcp).
+
+`create_project` creates the same filesystem project as REST. `list_system_log` and the REST/UI audit support separate filters for operational author and authenticated user. Task tags can be created/updated through MCP, REST and Assistant tools, edited in the UI, and filtered in task lists and Kanban. See [projects and audit](docs/reference/documents.md#project-creation-and-audit-queries) and [task tags](docs/reference/tasks.md#listing-filters-and-pagination).
+
+`append_task_comment` adds a dated, attributed reply in the same task Markdown, without requiring a client revision. REST and the task UI expose the same operation. Existing comments are preserved through description/metadata edits and cannot be changed through those APIs. The UI displays the discussion separately from the description editor. See [task comments](docs/reference/tasks.md#comments).
 
 See the [0.1.28 upgrade and release notes](docs/releases/0.1.28.md) for migration behavior, recovery of old truncated filenames, and changes since the `v0.1.27` tag.
 

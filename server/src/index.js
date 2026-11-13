@@ -28,6 +28,7 @@ import {
   addLog,
   addTextArtifact,
   createTask,
+  appendTaskComment,
   createDocument,
   createProject,
   createProjectFolder,
@@ -678,7 +679,10 @@ app.get("/api/readme", async (request, reply) => {
 
 app.get("/api/system-log", async (request, reply) => {
   try {
-    reply.send(await listSystemLogEvents({ limit: request.query.limit }))
+    reply.send(await listSystemLogEvents({
+      limit: request.query.limit, action: request.query.action,
+      actor: request.query.actor, authenticatedBy: request.query.authenticatedBy
+    }))
   } catch (error) {
     sendError(reply, error)
   }
@@ -875,6 +879,11 @@ app.get("/api/projects/:projectId/tasks", withTaskErrorBoundary(async (request, 
 }))
 app.get("/api/projects/:projectId/tasks/content", withTaskErrorBoundary(async (request, reply) => {
   reply.send(await readTask(request.params.projectId, String(request.query.path ?? "")))
+}))
+app.post("/api/projects/:projectId/tasks/comments", withTaskErrorBoundary(async (request, reply) => {
+  reply.code(201).send(await appendTaskComment(
+    request.params.projectId, String(request.query.path ?? ""), { ...request.body, ...requestAttribution(request) }
+  ))
 }))
 app.patch("/api/projects/:projectId/tasks/order", withTaskErrorBoundary(async (request, reply) => {
   reply.send({ items: await reorderTasks(request.params.projectId, request.body ?? {}) })

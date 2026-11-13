@@ -38,9 +38,12 @@ export type Task = ProjectFile & {
   order: number
   revision: string
   done: boolean
+  tags: string[]
 }
-export type TaskRecord = Task & { content: string }
-export type TaskPatch = { title?: string; status?: TaskStatus; owner?: string; deadline?: string; body?: string; content?: string }
+export type TaskComment = { id: string; author: string; createdAt: string; content: string }
+export type TaskRecord = Task & { content: string; descriptionContent: string; comments: TaskComment[] }
+export type TaskCommentResult = { comment: TaskComment; path: string; revision: string; task: TaskRecord }
+export type TaskPatch = { title?: string; status?: TaskStatus; owner?: string; deadline?: string; tags?: string[]; body?: string; content?: string }
 
 export type DocumentRecord = {
   id: string
@@ -116,6 +119,7 @@ export type SystemLogEvent = {
   action: string
   source: string
   actor: string | null
+  authenticatedBy?: string | null
   projectId: string | null
   target: string | null
   summary: string | null
@@ -126,6 +130,8 @@ export type SystemLogPage = {
   path: string
   items: SystemLogEvent[]
 }
+
+export type SystemLogFilters = { actor?: string; authenticatedBy?: string; action?: string }
 
 export type NewsPage = {
   items: NewsEntry[]
@@ -210,6 +216,7 @@ export type CreateTaskRequest = {
   status?: TaskStatus
   owner?: string
   deadline?: string
+  tags?: string[]
   body?: string
   content?: string
   author?: string

@@ -48,6 +48,13 @@ export async function listSystemLogEvents(options = {}) {
   )
   const unbounded = options.unbounded === true
   const actionFilter = typeof options.action === "string" ? options.action.trim() : ""
+  for (const name of ["actor", "authenticatedBy"]) {
+    if (options[name] !== undefined && typeof options[name] !== "string") {
+      throw Object.assign(new Error(`${name} must be a string`), { statusCode: 400 })
+    }
+  }
+  const actorFilter = options.actor?.trim() || ""
+  const authenticatedByFilter = options.authenticatedBy?.trim() || ""
   const metadataFilter = options.metadata && typeof options.metadata === "object" && !Array.isArray(options.metadata)
     ? options.metadata
     : null
@@ -90,6 +97,8 @@ export async function listSystemLogEvents(options = {}) {
       if (
         event &&
         matchesAction(event) &&
+        (!actorFilter || event.actor === actorFilter) &&
+        (!authenticatedByFilter || event.authenticatedBy === authenticatedByFilter) &&
         isMetadataMatch(event.metadata)
       ) {
         events.push(event)

@@ -5,6 +5,7 @@ import type { Task, TaskPatch, TaskStatus } from "@/domain/devsync"
 import type { AuthUser } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { TaskTagFilter, TaskTagsEditor } from "@/components/task-tags"
 
 export function TaskStatusSelect({
   value,
@@ -80,6 +81,8 @@ export function ProjectTasksView({
   onReorder: (tasks: Task[]) => Promise<void>
 }) {
   const [draggedPath, setDraggedPath] = useState<string | null>(null)
+  const [tagFilter, setTagFilter] = useState("")
+  const visibleTasks = tagFilter ? tasks.filter((task) => task.tags?.includes(tagFilter)) : tasks
   const [dropTarget, setDropTarget] = useState<{ path: string; after: boolean } | null>(null)
 
   function dragOver(event: DragEvent<HTMLDivElement>, path: string) {
@@ -107,19 +110,20 @@ export function ProjectTasksView({
 
   return (
     <section className="mx-auto max-w-5xl">
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-foreground">Tasks</h1>
-        <Button disabled={busy} variant="outline" onClick={onAdd}>
-          Add task
-        </Button>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <TaskTagFilter tasks={tasks} value={tagFilter} onChange={setTagFilter} />
+          <Button disabled={busy} variant="outline" onClick={onAdd}>Add task</Button>
+        </div>
       </div>
-      {tasks.length === 0 ? (
+      {visibleTasks.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          No tasks
+          {tagFilter ? "No tasks match this tag" : "No tasks"}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          {tasks.map((task) => (
+          {visibleTasks.map((task) => (
             <div
               key={`${task.path}:${task.revision}`}
               className="relative flex min-w-[700px] items-center gap-2 border-b border-border/70 px-3 py-2 last:border-b-0"
@@ -155,20 +159,23 @@ export function ProjectTasksView({
                   void onUpdate(task, { status }).catch(() => {})
                 }}
               />
-              <Input
-                aria-label="Task title"
-                className={`h-8 min-w-36 flex-1 border-transparent bg-transparent text-sm shadow-none hover:border-input ${["done", "rejected"].includes(task.status) ? "text-muted-foreground line-through" : ""}`}
-                defaultValue={task.title || task.name}
-                disabled={busy}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur()
-                }}
-                onBlur={(event) => {
-                  const title = event.currentTarget.value.trim()
-                  if (title && title !== task.title) void onUpdate(task, { title }).catch(() => {})
-                  else event.currentTarget.value = task.title || task.name
-                }}
-              />
+              <div className="min-w-36 flex-1 space-y-1">
+                <Input
+                  aria-label="Task title"
+                  className={`h-8 min-w-36 border-transparent bg-transparent text-sm shadow-none hover:border-input ${["done", "rejected"].includes(task.status) ? "text-muted-foreground line-through" : ""}`}
+                  defaultValue={task.title || task.name}
+                  disabled={busy}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur()
+                  }}
+                  onBlur={(event) => {
+                    const title = event.currentTarget.value.trim()
+                    if (title && title !== task.title) void onUpdate(task, { title }).catch(() => {})
+                    else event.currentTarget.value = task.title || task.name
+                  }}
+                />
+                <TaskTagsEditor value={task.tags ?? []} disabled={busy} onChange={(tags) => onUpdate(task, { tags })} />
+              </div>
               <Input
                 aria-label="Task deadline"
                 className="h-8 w-36 shrink-0 text-xs"
