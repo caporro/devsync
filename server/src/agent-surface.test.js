@@ -100,6 +100,28 @@ test("filename repair previews without writes, handles collisions, and preserves
   assert.deepEqual(await storage.repairTaskFileNames("repair", { dryRun: false }), { repairs: [], skipped: [] })
 })
 
+test("filename repair finds names written by dateStamp, without milliseconds", async () => {
+  const directory = await project("repair-stamp")
+  // dateStamp() drops milliseconds, so older releases truncated names like these.
+  const stamp = "2026-10-01T13-21-59Z-"
+  const names = [`${stamp}${"y".repeat(140 - stamp.length)}`, `${stamp}${"z".repeat(139 - stamp.length)}.`]
+  for (const [index, name] of names.entries()) {
+    assert.equal(name.length, 140)
+    await fs.writeFile(path.join(directory, name), legacyTask(`Stamp ${index}`, `stp0${index}`))
+  }
+  await fs.writeFile(path.join(directory, "README.md"), `# Tasks\n\n- [x] [Stamp 0](${names[0]}) — Alice\n- [ ] [Stamp 1](${names[1]})\n`)
+  const preview = await storage.repairTaskFileNames("repair-stamp")
+  assert.deepEqual(preview.repairs.map((item) => item.from), names.map((name) => `tasks/${name}`))
+  assert.equal(new Set(preview.repairs.map((item) => item.to)).size, names.length)
+  for (const { to } of preview.repairs) {
+    assert.ok(to.startsWith(`tasks/${stamp}`) && to.endsWith(".md") && path.basename(to).length <= 140, to)
+  }
+  await storage.repairTaskFileNames("repair-stamp", { dryRun: false })
+  for (const name of names) await assert.rejects(fs.access(path.join(directory, name)), { code: "ENOENT" })
+  const tasks = await storage.listTasks("repair-stamp")
+  assert.deepEqual(tasks.map((task) => [task.id, task.status, task.owner]), [["stp00", "done", "Alice"], ["stp01", "todo", ""]])
+})
+
 test("repair resumes a linked-but-not-unlinked file and reports binary candidates without changing them", async () => {
   const directory = await project("repair-retry")
   const broken = `${longStem}a.m`

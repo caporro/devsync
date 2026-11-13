@@ -1192,7 +1192,7 @@ export function repairTaskFileNames(projectId, { dryRun = true } = {}) {
     const skipped = []
     const entries = (await fs.readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
-      if (!entry.isFile() || entry.name.length < 140 || !/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-z0-9-]+(?:\.m?)?$/.test(entry.name)) continue
+      if (!entry.isFile() || entry.name.length < 140 || !/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z-[a-z0-9-]+(?:\.m?)?$/.test(entry.name)) continue
       const source = path.join(dir, entry.name)
       const buffer = await safeReadBuffer(source)
       let content
