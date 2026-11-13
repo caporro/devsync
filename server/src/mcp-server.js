@@ -1,10 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import {
-  createDocument, updateDocument, readDocument, createTask, deleteTask,
+  addLog, createDocument, updateDocument, readDocument, createTask, deleteTask,
   getProject, listTasks, listProjects, readTask, readProjectFile, readDocFile,
   searchFiles, toggleTask, updateTask, reorderTasks, TASK_STATUSES,
 } from "./storage.js"
+import { emitAutomationEvent } from "./automation-triggers.js"
+import { writeAttribution } from "./attribution.js"
 
 function jsonResult(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] }
@@ -12,9 +14,7 @@ function jsonResult(value) {
 
 export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUBLIC_URL ?? "" } = {}) {
   if (baseUrl && !["http:", "https:"].includes(new URL(baseUrl).protocol)) throw new Error("DEVSYNC_PUBLIC_URL must use HTTP or HTTPS")
-  const actor = String(user?.email || user?.username || "local-stdio")
-  const attribution = { author: actor, createdBy: actor, editor: actor, source: "mcp" }
-  const server = new McpServer({ name: "devsync", version: "0.1.27" })
+  const server = new McpServer({ name: "devsync", version: "0.1.28" })
   const projectId = z.string().min(1).describe("Project folder ID returned by list_projects.")
   const filePath = z.string().min(1).describe("Path relative to the project or docs folder, including its area, e.g. resources/analysis.md.")
   const ref = z.string().min(1).describe("Five-character document ID, shared HTTP /d/ID URL, or devsync://document/ID reference.")
@@ -31,11 +31,25 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
       catch (cause) { return { ...jsonResult({ error: cause.message, statusCode: cause.statusCode ?? 500 }), isError: true } }
     })
   }
+  function registerWrite(name, description, inputSchema, handler) {
+    register(name, description, {
+      ...inputSchema,
+      agentName: z.string().nullable().optional().describe("Optional declared agent name for this call (max 100 characters, single line). Empty/omitted uses the authenticated user. The authenticated identity is always retained in audit; this name grants no permissions.")
+    }, (input) => handler({ ...input, ...writeAttribution(user, input.agentName, "mcp") }))
+  }
   register("list_projects", "List available projects and their metadata. Use a returned project ID to browse or publish project documents.", {}, () => listProjects())
   register("get_project", "Get one project's metadata and lists of resources, work files, tasks and activity files.", { projectId }, ({ projectId }) => getProject(projectId))
+  registerWrite("append_log", "Append a project activity update attributed to agentName or the authenticated user. Long entries are saved as Markdown resources with a link in the log. Emits the same project_log.added automation event as HTTP.", {
+    projectId, content: z.string().trim().min(1),
+  }, async (input) => {
+    const entry = await addLog(input.projectId, input)
+    void emitAutomationEvent({ type: "project_log.added", projectId: input.projectId, payload: { entry } })
+      .catch((error) => console.error("Activity log automation event failed:", error.message))
+    return entry
+  })
   register("search_files", "Search all Markdown documents, including shared docs and project READMEs, using BM25 relevance. Every query word must match, regardless of order or case; accents are normalized. Returns excerpts, stable IDs and share links. Optional filters narrow the results.", {
     query: z.string().min(1), projectId: projectId.optional(), docId: z.string().optional(),
-    tag: z.string().optional(), author: z.string().optional().describe("Exact creator identity, normally an authenticated user's email."),
+    tag: z.string().optional(), author: z.string().optional().describe("Exact creator name: a declared agent name or an authenticated user's identity."),
     type: z.enum(["resources", "work", "tasks", "logs", "readme", "docs"]).optional(),
     limit: z.number().int().min(1).max(100).optional(),
   }, async (input) => (await searchFiles(input)).map(link))
@@ -46,15 +60,15 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
     if (Boolean(input.projectId) === Boolean(input.docId)) throw Object.assign(new Error("Specify projectId or docId"), { statusCode: 400 })
     return input.projectId ? readProjectFile(input.projectId, input.path) : readDocFile(input.docId, input.path)
   })
-  register("create_document", "Publish a Markdown document in exactly one project (resources or work) or shared docs folder (docId). Creates a stable ID and share link, records the authenticated token owner as creator, and logs project publication. Content is Markdown; tags are optional.", {
+  registerWrite("create_document", "Publish a Markdown document in exactly one project (resources or work) or shared docs folder (docId). Creates a stable ID and share link, records agentName or the authenticated user as creator, and logs project publication. Content is Markdown; tags are optional.", {
     projectId: projectId.optional(), docId: z.string().min(1).optional(),
     area: z.enum(["resources", "work"]).optional(), folder: z.string().optional(),
     title: z.string().min(1), content: z.string().min(1), tags: z.array(z.string()).optional(),
-  }, async (input) => link(await createDocument({ ...input, ...attribution })))
-  register("update_document", "Update a Markdown document by stable reference or location. First read_file and pass its revision as expectedRevision: stale writes are rejected. Preserves ID and original creator; the authenticated token owner becomes last editor. Activity logs remain append-only. Omitted title/tags preserve existing metadata.", {
+  }, async (input) => link(await createDocument(input)))
+  registerWrite("update_document", "Update a Markdown document by stable reference or location. First read_file and pass its revision as expectedRevision: stale writes are rejected. Preserves ID and original creator; agentName or the authenticated user becomes last editor. Activity logs remain append-only. Omitted title/tags preserve existing metadata.", {
     ...location, content: z.string(), title: z.string().min(1).optional(), tags: z.array(z.string()).optional(),
     expectedRevision: z.string().regex(/^[0-9a-f]{64}$/),
-  }, async (input) => link(await updateDocument({ ...input, ...attribution })))
+  }, async (input) => link(await updateDocument(input)))
   const revision = z
     .string()
     .regex(/^[0-9a-f]{64}$/)
@@ -62,9 +76,17 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
   const status = z.enum(TASK_STATUSES)
   register(
     "list_tasks",
-    "List project tasks in manual order, with status, assignee, deadline and revision. Task files are the source of truth.",
-    { projectId },
-    ({ projectId }) => listTasks(projectId)
+    "List project tasks in manual order with creator, last editor, status, deadline and revision. Compact by default (no content). Filters combine with AND. Pass limit (1–100) for {items, nextCursor}; repeat filters with the cursor. Changed results invalidate the cursor (409). Without limit/cursor returns the compatible array.",
+    {
+      projectId,
+      done: z.boolean().optional(), status: status.optional(), owner: z.string().optional(),
+      createdBy: z.string().optional(),
+      overdue: z.boolean().optional().describe("Deadline before today (UTC), excluding done/rejected tasks."),
+      updatedSince: z.string().optional().describe("ISO timestamp with timezone; filters by filesystem modification time, strictly after it."),
+      compact: z.boolean().optional().describe("Defaults to true. Set false to include Markdown content."),
+      limit: z.number().int().min(1).max(100).optional(), cursor: z.string().optional()
+    },
+    ({ projectId, ...options }) => listTasks(projectId, options)
   )
   register(
     "read_task",
@@ -75,9 +97,9 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
       return taskLink(task, input.projectId)
     }
   )
-  register(
+  registerWrite(
     "create_task",
-    "Create a self-contained Markdown task. Default status is backlog. Creator is the token owner; assigning an owner does not start execution.",
+    "Create a self-contained Markdown task. Default status is backlog. Creator is agentName or the authenticated user; assigning an owner does not start execution.",
     {
       projectId,
       title: z.string().min(1),
@@ -87,11 +109,11 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
       body: z.string().optional()
     },
     async (input) => {
-      const task = await createTask(input.projectId, { ...input, ...attribution })
+      const task = await createTask(input.projectId, input)
       return taskLink(task, input.projectId)
     }
   )
-  register(
+  registerWrite(
     "update_task",
     "Update one task's fields or Markdown using its current revision. Preserves ID and original creator; records audit and automation events.",
     {
@@ -105,9 +127,9 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
       content: z.string().optional(),
       expectedRevision: revision
     },
-    async (input) => taskLink(await updateTask(input.projectId, input.path, { ...input, ...attribution }), input.projectId)
+    async (input) => taskLink(await updateTask(input.projectId, input.path, input), input.projectId)
   )
-  register(
+  registerWrite(
     "toggle_task",
     "Compatibility operation: mark done or reopen as todo. Prefer update_task with an explicit status.",
     {
@@ -117,18 +139,18 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
       expectedRevision: revision
     },
     (input) =>
-      toggleTask(input.projectId, input.path, input.done, { ...attribution, expectedRevision: input.expectedRevision })
+      toggleTask(input.projectId, input.path, input.done, input)
   )
-  register(
+  registerWrite(
     "reorder_tasks",
     "Set the project's complete manual task order. Read list_tasks first and include each task's current revision.",
     {
       projectId,
       items: z.array(z.object({ path: filePath, expectedRevision: revision }))
     },
-    (input) => reorderTasks(input.projectId, { ...input, ...attribution })
+    (input) => reorderTasks(input.projectId, input)
   )
-  register(
+  registerWrite(
     "delete_task",
     "Permanently delete a task. Use only when the user requests deletion and provide its current revision.",
     {
@@ -136,7 +158,7 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
       path: filePath,
       expectedRevision: revision
     },
-    (input) => deleteTask(input.projectId, input.path, { ...attribution, expectedRevision: input.expectedRevision })
+    (input) => deleteTask(input.projectId, input.path, input)
   )
 
   return server

@@ -24,6 +24,7 @@ function cleanEvent(input = {}) {
     action: compact(input.action) ?? "write",
     source: compact(input.source) ?? "server",
     actor: compact(input.actor),
+    authenticatedBy: compact(input.authenticatedBy),
     projectId: compact(input.projectId),
     target: compact(input.target),
     summary: compact(input.summary),

@@ -38,6 +38,8 @@ The November 2026 review updated the backend graph for `@fastify/static`, `body-
 
 ## Container validation
 
+The 0.1.28 lockfile refresh updates the transitive `hono`, `@hono/node-server` and AWS XML-builder dependencies to compatible fixed versions. The XML-builder update removes the vulnerable XML-parser subtree. Both dependency audits pass for this release. The production image includes the task-migration and search-reindex scripts, runnable directly with Node.
+
 The Docker workflow runs backend tests in the production AMD64 image as its non-root user, with `NODE_ENV=test` and network access disabled. The tests use temporary storage and Fastify injection, without opening a listening server. Both AMD64 and ARM64 are then built; ARM64 runtime tests are not run by this workflow.
 
 Images are published only on version tags after the checks pass. Docker Hub publishing and the deployment of a running service are separate operations.

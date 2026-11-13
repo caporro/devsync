@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import Fastify from "fastify"
 import { registerAgentRoutes } from "./agent-routes.js"
 import { createAuth } from "./auth.js"
+import { writeAttribution } from "./attribution.js"
 import { createRequestGuard } from "./request-security.js"
 import { ensureVaultGit, gitPull, gitPush } from "./git.js"
 import { createDevsyncMcpServer } from "./mcp-server.js"
@@ -126,12 +127,8 @@ function currentApiUser(request) {
   return auth.currentUser(request)
 }
 
-function actorForUser(user) {
-  return String(user?.email || user?.username || "team")
-}
-
 function requestAttribution(request) {
-  return { author: actorForUser(currentApiUser(request)), source: "api" }
+  return writeAttribution(currentApiUser(request), request.body?.agentName ?? request.query.agentName, "api")
 }
 
 function bearerToken(request) {
@@ -394,10 +391,21 @@ app.addHook("preHandler", (request, reply, done) => {
   if (request.routeOptions.url?.startsWith("/api/")) {
     requireAuth(request, reply, (error) => {
       const route = request.routeOptions.url
-      if (!error && request.body && typeof request.body === "object" && !Array.isArray(request.body) &&
+      if (!error && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method) &&
         ["/api/projects", "/api/documents"].some((prefix) => route.startsWith(prefix))) {
-        const actor = actorForUser(currentApiUser(request))
-        Object.assign(request.body, { author: actor, editor: actor, creator: actor, createdBy: actor, source: "api" })
+        try {
+          const attribution = requestAttribution(request)
+          if (!request.isMultipart()) {
+            if (request.body == null) request.body = {}
+            if (typeof request.body !== "object" || Array.isArray(request.body)) {
+              throw Object.assign(new Error("Request body must be an object"), { statusCode: 400 })
+            }
+            Object.assign(request.body, attribution)
+          }
+        } catch (cause) {
+          sendError(reply, cause)
+          return
+        }
       }
       done(error)
     })
@@ -686,7 +694,7 @@ app.get("/api/news", async (request, reply) => {
 
 app.post("/api/git/pull", async (request, reply) => {
   try {
-    reply.send(await gitPull())
+    reply.send(await gitPull(requestAttribution(request)))
   } catch (error) {
     sendError(reply, error)
   }
@@ -694,7 +702,7 @@ app.post("/api/git/pull", async (request, reply) => {
 
 app.post("/api/git/push", async (request, reply) => {
   try {
-    reply.send(await gitPush())
+    reply.send(await gitPush(requestAttribution(request)))
   } catch (error) {
     sendError(reply, error)
   }
@@ -747,13 +755,11 @@ app.post("/api/projects/:projectId/logs", async (request, reply) => {
     const entry = await addLog(request.params.projectId, request.body ?? {})
     reply.code(201).send(entry)
 
-    if (!String(request.body?.author ?? "").startsWith("automation:")) {
-      void emitAutomationEvent({
-        type: "project_log.added",
-        projectId: request.params.projectId,
-        payload: { entry },
-      }, request.log)
-    }
+    void emitAutomationEvent({
+      type: "project_log.added",
+      projectId: request.params.projectId,
+      payload: { entry },
+    }, request.log)
   } catch (error) {
     sendError(reply, error)
   }
@@ -805,7 +811,7 @@ app.post("/api/projects/:projectId/resources/upload", async (request, reply) => 
   try {
     const file = await request.file()
     const resource = await saveUpload(request.params.projectId, file, {
-      author: actorForUser(currentApiUser(request)),
+      ...requestAttribution(request),
       folder: file?.fields?.folder?.value,
       logActivity: file?.fields?.logActivity?.value !== "false",
     })
@@ -864,7 +870,8 @@ app.post("/api/projects/:projectId/tasks", withTaskErrorBoundary(createProjectTa
 app.post("/api/projects/:projectId/plan", withTaskErrorBoundary(createProjectTaskLegacy))
 
 app.get("/api/projects/:projectId/tasks", withTaskErrorBoundary(async (request, reply) => {
-  reply.send({ items: await listTasks(request.params.projectId) })
+  const result = await listTasks(request.params.projectId, request.query)
+  reply.send(Array.isArray(result) ? { items: result } : result)
 }))
 app.get("/api/projects/:projectId/tasks/content", withTaskErrorBoundary(async (request, reply) => {
   reply.send(await readTask(request.params.projectId, String(request.query.path ?? "")))

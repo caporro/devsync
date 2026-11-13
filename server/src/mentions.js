@@ -109,6 +109,7 @@ export function addedUserMentions(before, after) {
 
 export async function appendMentionEvents({
   actor,
+  authenticatedBy,
   after,
   before = "",
   projectId,
@@ -125,6 +126,7 @@ export async function appendMentionEvents({
         action: "mention.created",
         source,
         actor,
+        authenticatedBy,
         projectId,
         target,
         summary: `Mentioned ${mention.label}`,

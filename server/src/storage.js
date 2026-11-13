@@ -23,6 +23,7 @@ const TASKS_README_FILE = "README.md"
 export const TASK_STATUSES = ["backlog", "todo", "doing", "pause", "done", "rejected"]
 const TASK_INDEX_MARKER = "<!-- devsync:tasks-v2; generated from task files -->"
 const taskQueues = new Map()
+const activityQueues = new Map()
 
 function withTaskLock(projectId, operation) {
   assertProjectId(projectId)
@@ -30,6 +31,15 @@ function withTaskLock(projectId, operation) {
   const settled = pending.catch(() => {})
   taskQueues.set(projectId, settled)
   void settled.then(() => { if (taskQueues.get(projectId) === settled) taskQueues.delete(projectId) })
+  return pending
+}
+
+function withActivityLock(projectId, operation) {
+  assertProjectId(projectId)
+  const pending = (activityQueues.get(projectId) ?? Promise.resolve()).then(operation)
+  const settled = pending.catch(() => {})
+  activityQueues.set(projectId, settled)
+  void settled.then(() => { if (activityQueues.get(projectId) === settled) activityQueues.delete(projectId) })
   return pending
 }
 const LEGACY_TASKS_README_FILE = "readme.md"
@@ -162,13 +172,17 @@ function normalizeList(value) {
 }
 
 function cleanFileName(input) {
-  return path
+  const cleaned = path
     .basename(String(input || "file"))
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 140) || "file"
+  const { name, ext } = path.parse(cleaned)
+  // Reserve space for the extension before truncating the basename.
+  return ext.length < 140
+    ? `${name.slice(0, 140 - ext.length)}${ext}` || "file"
+    : cleaned.slice(0, 140) || "file"
 }
 
 function cleanFolderPath(input) {
@@ -463,15 +477,17 @@ async function uniquePath(dir, wantedName) {
     const target = path.join(dir, candidate)
     try {
       await fs.access(target)
-      candidate = `${parsed.name}-${index}${parsed.ext}`
+      const suffix = `-${index}`
+      candidate = `${parsed.name.slice(0, Math.max(0, 140 - parsed.ext.length - suffix.length))}${suffix}${parsed.ext}`
       index += 1
-    } catch {
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
       return target
     }
   }
 }
 
-async function uniquePathWithNumberSuffix(dir, wantedName) {
+async function uniquePathWithNumberSuffix(dir, wantedName, reserved = new Set()) {
   const parsed = path.parse(cleanFileName(wantedName))
   let candidate = `${parsed.name}${parsed.ext}`
   let index = 1
@@ -479,10 +495,12 @@ async function uniquePathWithNumberSuffix(dir, wantedName) {
   while (true) {
     const target = path.join(dir, candidate)
     try {
-      await fs.access(target)
-      candidate = `${parsed.name}${index}${parsed.ext}`
+      if (!reserved.has(target)) await fs.access(target)
+      const suffix = String(index)
+      candidate = `${parsed.name.slice(0, Math.max(0, 140 - parsed.ext.length - suffix.length))}${suffix}${parsed.ext}`
       index += 1
-    } catch {
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
       return target
     }
   }
@@ -1033,6 +1051,9 @@ async function readTaskFiles(projectId) {
         title: String(fields.title || titleFromMarkdown(parseTaskFrontmatter(content).body) || indexedFileTitle(file)),
         owner: String(fields.owner ?? ""),
         deadline: String(fields.deadline ?? ""),
+        createdBy: String(fields.createdBy ?? fields.creator ?? ""),
+        updatedBy: String(fields.lastEditor ?? ""),
+        tags: normalizeList(fields.tags),
         status: fields.status,
         order: fields.order === undefined ? undefined : taskOrder(fields.order),
         revision: documentRevision(content),
@@ -1151,6 +1172,145 @@ export function ensureTaskIndex(projectId) {
   return withTaskLock(projectId, () => ensureTaskIndexUnlocked(projectId))
 }
 
+// Explicit maintenance operation: only recover files matching the old task
+// naming bug and recognizable task metadata. Ordinary reads never rename data.
+export function repairTaskFileNames(projectId, { dryRun = true } = {}) {
+  return withTaskLock(projectId, async () => {
+    const dir = await safeLegacyDir(projectId, "tasks") ?? await safeLegacyDir(projectId, "plan")
+    if (!dir) return { repairs: [], skipped: [] }
+    const kind = path.basename(dir)
+    const reserved = new Set()
+    const plans = []
+    const skipped = []
+    const entries = (await fs.readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.length < 140 || !/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-z0-9-]+(?:\.m?)?$/.test(entry.name)) continue
+      const source = path.join(dir, entry.name)
+      const buffer = await safeReadBuffer(source)
+      let content
+      try {
+        if (buffer.includes(0)) throw new Error()
+        content = new TextDecoder("utf-8", { fatal: true }).decode(buffer)
+        const { data, body } = parseTaskFrontmatter(content)
+        if (!String(data.title ?? "").trim() || !Number.isFinite(Date.parse(data.createdAt)) || !/^#\s+\S/m.test(body)) throw new Error()
+      } catch {
+        skipped.push({ path: `${kind}/${entry.name}`, reason: "Not recognizable as a UTF-8 Markdown task; inspect manually." })
+        continue
+      }
+      // A crash between link and unlink can leave both names for the same file.
+      // Reuse that destination on retry instead of creating a duplicate task.
+      const sourceStat = await fs.stat(source)
+      let target
+      if (sourceStat.nlink > 1) {
+        for (const candidate of entries.filter((item) => item.isFile() && isMarkdownName(item.name))) {
+          const candidatePath = path.join(dir, candidate.name)
+          const stat = await fs.stat(candidatePath)
+          if (stat.dev === sourceStat.dev && stat.ino === sourceStat.ino) {
+            target = candidatePath
+            break
+          }
+        }
+      }
+      target ??= await uniquePathWithNumberSuffix(dir, `${entry.name.replace(/\.m?$/, "")}.md`, reserved)
+      reserved.add(target)
+      plans.push({ source, target, content })
+    }
+    const repairs = plans.map(({ source, target }) => ({ from: `${kind}/${path.basename(source)}`, to: `${kind}/${path.basename(target)}` }))
+    if (dryRun || plans.length === 0) return { repairs, skipped }
+
+    let indexPath
+    let originalIndex
+    for (const name of [TASKS_README_FILE, LEGACY_TASKS_README_FILE]) {
+      try {
+        indexPath = path.join(dir, name)
+        originalIndex = await safeReadTextFile(indexPath)
+        break
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error
+      }
+    }
+    // Keep a byte-for-byte source copy before any rename or index update.
+    const backupDir = path.join(dir, ".filename-repair")
+    await ensureSafeDir(backupDir)
+    for (const [name, content] of [
+      ...(originalIndex === undefined ? [] : [[path.basename(indexPath), originalIndex]]),
+      ...plans.map(({ source, content }) => [path.basename(source), content])
+    ]) {
+      const backup = path.join(backupDir, name)
+      await assertSafeWritableFile(vaultDir, backup)
+      await fs.writeFile(backup, content, { flag: "wx" }).catch((error) => {
+        if (error.code !== "EEXIST") throw error
+      })
+    }
+    // Write a durable rename map, so an interrupted run can be inspected.
+    await safeWriteTextFile(path.join(backupDir, `repair-${randomUUID()}.json`), `${JSON.stringify(repairs, null, 2)}\n`)
+    if (originalIndex?.includes(TASK_INDEX_MARKER)) {
+      // A prior migration omitted non-Markdown files from its generated index.
+      // Recover their checkbox/assignment from the saved legacy index, while
+      // preserving any explicit metadata already in the task itself.
+      let legacyIndex = ""
+      try {
+        legacyIndex = await safeReadTextFile(path.join(dir, ".migration-v2", TASKS_README_FILE))
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error
+      }
+      const legacyItems = parseIndexItems(legacyIndex, kind, TASKS_README_FILE.toLowerCase())
+      for (const plan of plans) {
+        const item = legacyItems.find((item) => item.path === `${kind}/${path.basename(plan.source)}`)
+        if (!item) continue
+        const previous = parseTaskFrontmatter(plan.content).data
+        const fields = {}
+        if (!previous.status || previous.status === "open") fields.status = item.done ? "done" : "todo"
+        if (!previous.owner && item.owner) fields.owner = item.owner
+        if (!previous.deadline && item.deadline) fields.deadline = item.deadline
+        if (Object.keys(fields).length) {
+          // A resumed hard-link step must be recreated after atomic replacement
+          // of the source, otherwise the destination would keep the old inode.
+          const sourceStat = await fs.stat(plan.source)
+          const targetStat = await fs.lstat(plan.target).catch((error) => {
+            if (error.code !== "ENOENT") throw error
+            return null
+          })
+          if (targetStat && sourceStat.dev === targetStat.dev && sourceStat.ino === targetStat.ino) await fs.unlink(plan.target)
+          const content = withDocumentFields(plan.content, fields)
+          await migrateTaskFile(plan.source, content, documentRevision(plan.content))
+          plan.content = content
+        }
+      }
+    }
+    if (originalIndex !== undefined) {
+      const destinations = new Map(repairs.map(({ from, to }) => [from, path.basename(to)]))
+      const nextIndex = originalIndex.replace(/(\]\()((?:\\.|[^)\\\r\n])+)(\))/g, (match, open, destination, close) => {
+        const replacement = destinations.get(normalizeIndexPath(destination, kind, TASKS_README_FILE.toLowerCase()))
+        return replacement ? `${open}${encodeURI(replacement)}${close}` : match
+      })
+      await migrateTaskFile(indexPath, nextIndex, documentRevision(originalIndex))
+    }
+    // Point the index at all destinations first. After an interruption the
+    // remaining source files can be retried without losing their checkboxes.
+    for (const { source, target, content } of plans) {
+      if (documentRevision(await safeReadTextFile(source)) !== documentRevision(content)) {
+        throw Object.assign(new Error("Task changed during filename repair. Stop writers and retry."), { statusCode: 409 })
+      }
+      // link is exclusive: an independently created destination is never replaced.
+      try {
+        await fs.link(source, target)
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error
+        const [left, right] = await Promise.all([fs.stat(source), fs.lstat(target)])
+        if (right.isSymbolicLink() || left.dev !== right.dev || left.ino !== right.ino) throw error
+      }
+      await fs.unlink(source)
+    }
+    await documentIndex.reconcile()
+    await appendSystemLogEvent({
+      action: "task.filenames_repaired", source: "migration", actor: "migration", projectId,
+      summary: `Repaired ${repairs.length} task filename(s)`, metadata: { repairs }
+    })
+    return { repairs, skipped }
+  })
+}
+
 function summarizeContent(content) {
   const firstLine = content.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "update"
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine
@@ -1230,7 +1390,11 @@ async function listActivitySegmentFiles(projectId) {
   }
 }
 
-async function ensureActivityLog(projectId) {
+function ensureActivityLog(projectId) {
+  return withActivityLock(projectId, () => ensureActivityLogUnlocked(projectId))
+}
+
+async function ensureActivityLogUnlocked(projectId) {
   const dir = activityLogDirPath(projectId)
   await ensureSafeDir(dir)
 
@@ -1340,9 +1504,13 @@ function parseActivityEntries(raw, options = {}) {
   return parseMarkdownActivityEntries(raw, options)
 }
 
-async function appendActivityEntry(projectId, input) {
+function appendActivityEntry(projectId, input) {
+  return withActivityLock(projectId, () => appendActivityEntryUnlocked(projectId, input))
+}
+
+async function appendActivityEntryUnlocked(projectId, input) {
   await ensureProjectDirs(projectId)
-  await ensureActivityLog(projectId)
+  await ensureActivityLogUnlocked(projectId)
 
   const createdAt = input.createdAt ?? nowIso()
   const author = String(input.author ?? "team").trim() || "team"
@@ -1651,6 +1819,7 @@ export async function createProject(input) {
   await appendSystemLogEvent({
     action: "project.created",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.creator ?? "team",
     projectId,
     target: "project.json",
@@ -1707,6 +1876,7 @@ export async function updateProject(projectId, input) {
   await appendSystemLogEvent({
     action: nextProjectId === projectId ? "project.updated" : "project.renamed",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.editor ?? "team",
     projectId: nextProjectId,
     target: "project.json",
@@ -1787,6 +1957,7 @@ export async function addTextArtifact(projectId, input) {
   await appendSystemLogEvent({
     action: "artifact.created",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: creator,
     projectId,
     target: relativePath,
@@ -1837,6 +2008,7 @@ export async function addLinkArtifact(projectId, input) {
   await appendSystemLogEvent({
     action: "artifact.created",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: creator,
     projectId,
     target: relativePath,
@@ -1926,6 +2098,7 @@ export async function addExcalidrawArtifact(projectId, input = {}) {
   await appendSystemLogEvent({
     action: "artifact.created",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: creator,
     projectId,
     target: relativePath,
@@ -1950,6 +2123,7 @@ async function appendMentionEventsForWrite(projectId, target, before, after, inp
     before,
     projectId,
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     target,
     targetType,
   })
@@ -1957,6 +2131,7 @@ async function appendMentionEventsForWrite(projectId, target, before, after, inp
 
 async function appendTaskAssignedEvent({
   actor,
+  authenticatedBy,
   projectId,
   source,
   target,
@@ -1972,6 +2147,7 @@ async function appendTaskAssignedEvent({
     action: "task.assigned",
     source: source ?? "storage",
     actor: String(actor ?? "team").trim() || "team",
+    authenticatedBy,
     projectId,
     target,
     summary: `Assigned task ${title || "task"}`,
@@ -2012,6 +2188,8 @@ async function taskRecord(projectId, relativePath) {
     done: status === "done",
     createdAt: fields.createdAt ?? null,
     author: String(fields.createdBy ?? fields.creator ?? ""),
+    createdBy: String(fields.createdBy ?? fields.creator ?? ""),
+    updatedBy: String(fields.lastEditor ?? ""),
     tags: normalizeList(fields.tags),
     updatedAt: stat.mtime.toISOString(),
     size: stat.size,
@@ -2032,6 +2210,8 @@ export function createTask(projectId, input = {}) {
       title,
       createdAt: created,
       createdBy: creator,
+      lastEditor: creator,
+      lastEdited: created,
       owner: resolveTaskOwner(input.owner),
       deadline: normalizeTaskDeadline(input.deadline),
       status: taskStatus(input.status),
@@ -2058,6 +2238,7 @@ export function createTask(projectId, input = {}) {
     await appendSystemLogEvent({
       action: "task.created",
       source: input.source ?? "storage",
+      authenticatedBy: input?.authenticatedBy,
       actor: creator,
       projectId,
       target: task.path,
@@ -2113,6 +2294,7 @@ export function reorderTasks(projectId, input = {}) {
     await appendSystemLogEvent({
       action: "task.reordered",
       source: input.source ?? "storage",
+      authenticatedBy: input?.authenticatedBy,
       actor: input.author ?? "team",
       projectId,
       summary: "Reordered tasks",
@@ -2152,7 +2334,7 @@ export async function addLog(projectId, input) {
     await safeWriteTextFile(target, document)
     kind = "artifact"
     artifactPath = projectRelative(projectId, target)
-    logContent = `Long update archived as [${title}](../${artifactPath}).`
+    logContent = `Long update archived as [${markdownLinkLabel(title)}](../${artifactPath}).`
   }
 
   const entry = await appendActivityEntry(projectId, {
@@ -2167,6 +2349,7 @@ export async function addLog(projectId, input) {
   await appendSystemLogEvent({
     action: "activity_log.appended",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: author,
     projectId,
     target: entry.path,
@@ -2209,6 +2392,7 @@ export async function saveUpload(projectId, filePart, input = {}) {
   await appendSystemLogEvent({
     action: "artifact.uploaded",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input.author ?? "team",
     projectId,
     target: relativePath,
@@ -2239,6 +2423,7 @@ export async function createProjectFolder(projectId, dirName, input = {}) {
   await appendSystemLogEvent({
     action: "folder.created",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.creator ?? "team",
     projectId,
     target: `${canonicalDirName}/${folder}`,
@@ -2347,6 +2532,7 @@ export async function moveProjectEntry(projectId, input = {}) {
   await appendSystemLogEvent({
     action: "file.moved",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: to,
@@ -2378,6 +2564,7 @@ export async function deleteArtifact(projectId, relativePath, input = {}) {
   await appendSystemLogEvent({
     action: "artifact.deleted",
     source: input.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input.author ?? "team",
     projectId,
     target: projectRelative(projectId, fullPath),
@@ -2403,6 +2590,7 @@ export function deleteTask(projectId, relativePath, input = {}) {
     await appendSystemLogEvent({
       action: "task.deleted",
       source: input.source ?? "storage",
+      authenticatedBy: input?.authenticatedBy,
       actor: input.author ?? "team",
       projectId,
       target: task.path,
@@ -2441,6 +2629,7 @@ export async function renameArtifact(projectId, relativePath, input = {}) {
   await appendSystemLogEvent({
     action: "artifact.renamed",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: projectRelative(projectId, target),
@@ -2461,6 +2650,7 @@ export async function updateMarkdownArtifact(projectId, relativePath, input = {}
   await appendSystemLogEvent({
     action: "artifact.updated",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: saved.path,
@@ -2488,6 +2678,7 @@ export async function updateExcalidrawArtifact(projectId, relativePath, input = 
   await appendSystemLogEvent({
     action: "artifact.updated",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: projectRelative(projectId, fullPath),
@@ -2508,6 +2699,7 @@ export async function updateGeneratedMarkdown(projectId, relativePath, input = {
   await appendSystemLogEvent({
     action: "work.updated",
     source: input?.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input?.author ?? input?.editor ?? "team",
     projectId,
     target: saved.path,
@@ -2604,6 +2796,7 @@ async function updateTaskUnlocked(projectId, relativePath, input = {}) {
   await appendSystemLogEvent({
     action: "task.updated",
     source: input.source ?? "storage",
+    authenticatedBy: input?.authenticatedBy,
     actor: input.author ?? "team",
     projectId,
     target: task.path,
@@ -2611,6 +2804,7 @@ async function updateTaskUnlocked(projectId, relativePath, input = {}) {
   })
   await appendTaskAssignedEvent({
     actor: input.author ?? "team",
+    authenticatedBy: input.authenticatedBy,
     projectId,
     source: input.source,
     target: task.path,
@@ -2622,6 +2816,7 @@ async function updateTaskUnlocked(projectId, relativePath, input = {}) {
     await appendSystemLogEvent({
       action: "task.status_changed",
       source: input.source ?? "storage",
+      authenticatedBy: input?.authenticatedBy,
       actor: input.author ?? "team",
       projectId,
       target: task.path,
@@ -2682,17 +2877,93 @@ export async function readProjectFileBuffer(projectId, relativePath) {
   }
 }
 
-async function listTaskRecordsUnlocked(projectId) {
+async function listTaskRecordsUnlocked(projectId, { compact = true } = {}) {
   return sortTasks(await readTaskFiles(projectId)).map(({ content, ...file }) => ({
     ...file,
-    done: file.status === "done"
+    done: file.status === "done",
+    ...(compact ? {} : { content })
   }))
 }
 
-export function listTasks(projectId) {
+function taskListOptions(input) {
+  function boolean(name, fallback) {
+    const value = input[name]
+    if (value === undefined) return fallback
+    if (value === true || value === "true") return true
+    if (value === false || value === "false") return false
+    throw Object.assign(new Error(`${name} must be true or false`), { statusCode: 400 })
+  }
+  for (const name of ["owner", "createdBy", "updatedSince", "cursor"]) {
+    if (input[name] !== undefined && typeof input[name] !== "string") {
+      throw Object.assign(new Error(`${name} must be a string`), { statusCode: 400 })
+    }
+  }
+  const paged = input.limit !== undefined || input.cursor !== undefined
+  const limit = input.limit === undefined ? 50 : Number(input.limit)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw Object.assign(new Error("limit must be an integer between 1 and 100"), { statusCode: 400 })
+  }
+  let updatedSince
+  if (input.updatedSince !== undefined) {
+    updatedSince = Date.parse(input.updatedSince)
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(input.updatedSince) || !Number.isFinite(updatedSince)) {
+      throw Object.assign(new Error("updatedSince must be an ISO timestamp with a timezone"), { statusCode: 400 })
+    }
+  }
+  return {
+    done: boolean("done"), overdue: boolean("overdue"), compact: boolean("compact", true),
+    status: input.status === undefined ? undefined : taskStatus(input.status),
+    owner: input.owner, createdBy: input.createdBy, updatedSince,
+    paged, limit, cursor: input.cursor
+  }
+}
+
+export function listTasks(projectId, options = {}) {
   return withTaskLock(projectId, async () => {
+    const query = taskListOptions(options)
     await ensureTaskIndexUnlocked(projectId)
-    return listTaskRecordsUnlocked(projectId)
+    const today = nowIso().slice(0, 10)
+    const tasks = (await listTaskRecordsUnlocked(projectId, query)).filter((task) => {
+      const overdue = Boolean(task.deadline && task.deadline < today && !["done", "rejected"].includes(task.status))
+      return (query.done === undefined || task.done === query.done) &&
+        (query.status === undefined || task.status === query.status) &&
+        (query.owner === undefined || task.owner === query.owner) &&
+        (query.createdBy === undefined || task.createdBy === query.createdBy) &&
+        (query.overdue === undefined || overdue === query.overdue) &&
+        (query.updatedSince === undefined || Date.parse(task.updatedAt) > query.updatedSince)
+    })
+    if (!query.paged) return tasks
+
+    // Bind a cursor to this query and its matching records. Reject changed
+    // snapshots rather than skipping/duplicating tasks after edits or reorders.
+    const snapshot = documentRevision(JSON.stringify({
+      projectId, done: query.done, status: query.status, owner: query.owner,
+      createdBy: query.createdBy, overdue: query.overdue, updatedSince: query.updatedSince,
+      compact: query.compact, today: query.overdue === undefined ? undefined : today,
+      tasks: tasks.map((task) => [task.path, task.revision, task.updatedAt])
+    }))
+    let offset = 0
+    if (query.cursor !== undefined) {
+      let cursor
+      try {
+        if (!/^[A-Za-z0-9_-]{1,512}$/.test(query.cursor)) throw new Error()
+        cursor = JSON.parse(Buffer.from(query.cursor, "base64url").toString("utf8"))
+        if (!cursor || !Number.isSafeInteger(cursor.offset) || cursor.offset < 1 || !/^[0-9a-f]{64}$/.test(cursor.snapshot)) throw new Error()
+      } catch {
+        throw Object.assign(new Error("Invalid task cursor"), { statusCode: 400 })
+      }
+      if (cursor.snapshot !== snapshot || cursor.offset >= tasks.length) {
+        throw Object.assign(new Error("Task list or filters changed. Restart pagination without a cursor."), { statusCode: 409 })
+      }
+      offset = cursor.offset
+    }
+    const end = offset + query.limit
+    return {
+      items: tasks.slice(offset, end),
+      nextCursor: end < tasks.length
+        ? Buffer.from(JSON.stringify({ offset: end, snapshot })).toString("base64url")
+        : null
+    }
   })
 }
 
@@ -2791,7 +3062,7 @@ export async function createDocument(input = {}) {
     await touchProject(input.projectId)
     await appendMentionEventsForWrite(input.projectId, relative, "", await safeReadTextFile(target), input)
   }
-  await appendSystemLogEvent({ action: "document.created", source: input.source ?? "storage", actor: creator, projectId: input.projectId, target: path.relative(vaultDir, target), summary: `Created document ${title}` })
+  await appendSystemLogEvent({ action: "document.created", source: input.source ?? "storage", actor: creator, authenticatedBy: input.authenticatedBy, projectId: input.projectId, target: path.relative(vaultDir, target), summary: `Created document ${title}` })
   return documentIndex.byPath(target)
 }
 
@@ -2816,7 +3087,7 @@ export async function updateDocument(input = {}) {
       await appendMentionEventsForWrite(existing.projectId, existing.path, existing.content, input.content, input)
     }
   }
-  await appendSystemLogEvent({ action: "document.updated", source: input.source ?? "storage", actor: input.author ?? "team", projectId: existing.projectId, target: path.relative(vaultDir, target), summary: `Updated document ${existing.id}` })
+  await appendSystemLogEvent({ action: "document.updated", source: input.source ?? "storage", actor: input.author ?? "team", authenticatedBy: input.authenticatedBy, projectId: existing.projectId, target: path.relative(vaultDir, target), summary: `Updated document ${existing.id}` })
   return documentIndex.byPath(target)
 }
 

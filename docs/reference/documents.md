@@ -59,9 +59,37 @@ Pass this input to `create_document`. For shared docs, use `docId` instead of `p
 
 To call `update_document`, pass `ref` (or location), Markdown `content`, and `expectedRevision` from the latest read. Optional `title` and `tags` replace those fields; omitted fields preserve existing metadata. ID and original creator cannot be supplied or replaced by the client. Concurrent updates using an old revision return a conflict, requiring a fresh read. Activity logs remain append-only; task index edits use task tools.
 
-Personal HTTP MCP tokens determine `creator`/`createdBy` and `lastEditor`. Shared API tokens use the technical identity `api-token`; local stdio uses `local-stdio`. The client cannot select the author. HTTP UI/API writes likewise derive the actor from the authenticated user. Original creator and owner/assignee are separate concepts.
+### Authorship and audit
+
+Every MCP write tool and REST project/document write accepts optional `agentName`. This is a free, declared name for the current call, with no agent registry or additional permissions. After trimming, a nonempty name becomes the author (`creator`/`createdBy` on creation, `lastEditor` on edits, or `author` on log entries). Omitted, null or whitespace-only names fall back to the authenticated user. Names must be a single line of at most 100 characters, without control characters. Original creators remain immutable when another agent edits a document or task; owner/assignee remains a separate field.
+
+In REST JSON requests, pass `agentName` alongside the other fields. It can also be supplied as a query parameter; a non-null JSON value takes precedence. For multipart uploads and body-less requests, use the query parameter, for example `POST /api/projects/my-project/resources/upload?agentName=Custode`. In MCP, pass it in the tool arguments:
+
+```json
+{ "projectId": "my-project", "content": "Audit completed.", "agentName": "Custode" }
+```
+
+Each resulting API/MCP mutation audit event records both `actor` (the declared agent, or authenticated fallback) and `authenticatedBy` (the authenticated channel identity, always imposed by the server). For a client authenticated as `marco@example.com`, the example above produces:
+
+```json
+{ "actor": "Custode", "authenticatedBy": "marco@example.com" }
+```
+
+Raw client fields such as `author`, `creator`, `createdBy`, `editor` and `authenticatedBy` do not override server attribution. A shared REST API token identifies `api-token`; local stdio uses `local-stdio`, and anonymous local REST uses `team`. These technical identities also remain in the audit when `agentName` is supplied. The declared name is operational attribution, not proof of an independent authenticated agent. Concurrent calls sharing one MCP client each carry their own name; no current-agent state is shared. Historical audit records are not backfilled with an inferred identity.
 
 The deprecated `list_plan_items`, `read_plan_item`, `create_plan_item`, `update_plan_item`, `toggle_plan_item` and `delete_plan_item` aliases are removed. Use the corresponding task tools.
+
+### Activity updates over MCP
+
+Use `append_log` for a project diary or update:
+
+```json
+{ "projectId": "my-project", "content": "Audit completed. The next action is tracked in the delivery task." }
+```
+
+The tool uses the existing activity-log storage, attributes the entry to `agentName` or the authenticated user, and records an `activity_log.appended` audit event with source `mcp` and the server-derived `authenticatedBy`. It returns the entry's ID, author, content, kind and segment path. Entries beyond `DEVSYNC_ACTIVITY_INLINE_MAX_CHARS` (default 800) are saved as Markdown resources and linked from the log; the result includes `artifactPath`. Inserts and segment rotation are serialized per project within the process, preserving unique entry IDs under concurrent requests. Use a single writer process for a vault; separate HTTP/stdio processes do not share the in-process lock.
+
+Like `POST /api/projects/:projectId/logs`, this tool emits `project_log.added` for existing event automations. Logs remain append-only. Task filters and paginated summaries are documented in [tasks](tasks.md).
 
 ## Search
 
@@ -93,5 +121,7 @@ To rebuild the derived tables from the vault:
 ```bash
 npm run reindex
 ```
+
+The production Docker image includes this script; run `node scripts/reindex-documents.mjs` there with the configured data mount/environment.
 
 Use the same vault configuration as the server. If the SQLite file itself is corrupt, stop the HTTP/stdio processes, remove only `.devsync/search.sqlite` and its `-wal`/`-shm` sidecars, and run the rebuild command. Original Markdown files are retained.

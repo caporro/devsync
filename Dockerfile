@@ -20,6 +20,7 @@ RUN npm ci --omit=dev --ignore-scripts \
   && npm cache clean --force \
   && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --chown=node:node server ./server
+COPY --chown=node:node scripts/migrate-tasks.mjs scripts/reindex-documents.mjs ./scripts/
 COPY --from=web-build --chown=node:node /app/web/dist ./web/dist
 RUN mkdir -p /data && chown -R node:node /data
 USER node

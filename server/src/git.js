@@ -153,7 +153,7 @@ function vaultPathspec(gitRoot) {
   return relative
 }
 
-export async function gitPull() {
+export async function gitPull(input = {}) {
   const rootResult = await resolveGitRoot()
 
   if (!rootResult.ok) {
@@ -169,7 +169,8 @@ export async function gitPull() {
   await appendSystemLogEvent({
     action: "git.pull",
     source: "git",
-    actor: "server",
+    actor: input.author ?? "server",
+    authenticatedBy: input.authenticatedBy,
     target: vaultDir,
     summary: pull.ok ? "Git pull completed" : "Git pull failed",
     metadata: { ok: pull.ok, code: pull.code },
@@ -229,7 +230,7 @@ export async function ensureVaultGit() {
   }
 }
 
-export async function gitPush() {
+export async function gitPush(input = {}) {
   const rootResult = await resolveGitRoot()
 
   if (!rootResult.ok) {
@@ -300,7 +301,8 @@ export async function gitPush() {
   await appendSystemLogEvent({
     action: "git.push",
     source: "git",
-    actor: "server",
+    actor: input.author ?? "server",
+    authenticatedBy: input.authenticatedBy,
     target: vaultDir,
     summary: push.ok ? "Git push completed" : "Git push failed",
     metadata: { ok: push.ok, code: push.code, committed },

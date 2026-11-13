@@ -196,7 +196,7 @@ docker run -d \
   -e AUTH_SESSION_SECRET='change-me-to-a-long-random-string-at-least-32-chars' \
   -e AUTH_COOKIE_SECURE=true \
   -e OPENAI_API_KEY='sk-...' \
-  caporro/devsync:0.1.27
+  caporro/devsync:0.1.28
 ```
 
 Notes:
@@ -216,7 +216,7 @@ docker compose up -d
 
 The GitHub workflow runs syntax checks, backend/frontend tests, lint, build, and dependency audits on pushes and pull requests. It then builds and tests the production AMD64 image without network access, and builds both `linux/amd64` and `linux/arm64` with Buildx. Node 24.22.1 is pinned in CI and both Docker stages, and builds pull fresh base images.
 
-Publishing is limited to `v*` tags in `caporro/devsync`, after all checks pass. The tag must exactly match the version in both `package.json` files, for example `v0.1.27`. A stable release publishes `caporro/devsync:0.1.27`, `latest`, and a commit SHA tag, with SBOM and provenance attestations. Branches and pull requests never publish images.
+Publishing is limited to `v*` tags in `caporro/devsync`, after all checks pass. The tag must exactly match the version in both `package.json` files, for example `v0.1.28`. A stable release publishes `caporro/devsync:0.1.28`, `latest`, and a commit SHA tag, with SBOM and provenance attestations. Branches and pull requests never publish images.
 
 Configure these GitHub Actions repository settings before publishing:
 
@@ -527,6 +527,7 @@ MCP tools:
 
 - `list_projects`;
 - `get_project`;
+- `append_log`;
 - `search_files`;
 - `read_file`;
 - `create_document`;
@@ -543,7 +544,11 @@ Documents can be published to project `resources/` or `work/`, or a shared `docs
 
 Search uses SQLite FTS5 through Node's built-in `node:sqlite`, ranks by BM25, and requires every query word to match. It covers project notes, resources, work, tasks, activity logs and shared docs, with excerpts and filters for project, type, tag and author. Files remain the source of truth; the SQLite cache is rebuildable and excluded from Git.
 
-MCP writes record the authenticated token owner's identity. `update_document` requires the `revision` returned by `read_file` as `expectedRevision`, rejecting stale updates. Deprecated `*_plan_item` MCP aliases have been removed.
+MCP and REST writes accept optional `agentName` as a declared operational author; omitted or blank names use the authenticated user. The audit always keeps the authenticated identity in `authenticatedBy`, alongside the operational `actor`. Original creators remain immutable on edits. See [authorship and audit](docs/reference/documents.md#authorship-and-audit). `update_document` requires the `revision` returned by `read_file` as `expectedRevision`, rejecting stale updates. Deprecated `*_plan_item` MCP aliases have been removed.
+
+Use `append_log` for project diaries and updates; long entries become linked Markdown resources. `list_tasks` supports creator/editor metadata, combined filters and optional `limit`/`cursor` pagination, with compact summaries by default. Existing unpaginated calls retain their response shape. See [task queries and filename repair](docs/reference/tasks.md) and [MCP activity updates](docs/reference/documents.md#activity-updates-over-mcp).
+
+See the [0.1.28 upgrade and release notes](docs/releases/0.1.28.md) for migration behavior, recovery of old truncated filenames, and changes since the `v0.1.27` tag.
 
 Planning/Gantt has been removed. Tasks, My Tasks and task tools remain available. Existing `vault-plan.json` and `gantt.json` files are preserved unchanged and are no longer read or updated.
 
