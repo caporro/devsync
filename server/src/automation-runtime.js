@@ -274,7 +274,7 @@ export async function runAutomation({ automation, projectId, input, log }) {
     log?.info({ automationId: automation.id, model: automation.model }, "automation resolving model")
     const model = await resolveChatModel(automation.model)
     const systemPrompt = await buildSystemPrompt(automation, projectId)
-    const tools = resolveAgentTools(automation.tools, { projectId, read: automation.read, write: automation.write })
+    const tools = resolveAgentTools(automation.tools, { projectId, read: automation.read, write: automation.write, actor: `automation:${automation.key}`, source: "automation" })
 
     log?.info({
       automationId: automation.id,

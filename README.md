@@ -366,7 +366,7 @@ Meaning:
 - `README.md`: main notes;
 - `logs/`: append-only activity log;
 - `resources/`: raw material, inputs, sources, uploads, links, notes, images, PDFs, Excalidraw files;
-- `tasks/`: tasks, owner, deadline, and index;
+- `tasks/`: self-contained Markdown tasks with status, owner, deadline and manual order; README is generated;
 - `work/`: produced or refined material from Assistant, automations, or people;
 - `assistant.md`: AI instructions;
 - `config/skills.json`: disabled system skill config;
@@ -376,6 +376,8 @@ Meaning:
 The vault can be versioned with Git. Git sync helps, but it does not replace a full backup.
 
 Detailed layout: [docs/reference/vault-layout.md](docs/reference/vault-layout.md).
+
+Task states are `backlog`, `todo`, `doing`, `pause`, `done`, `rejected`. Existing checklists migrate automatically to task metadata, preserving contents, assignments and order; originals are backed up inside each project's `tasks/.migration-v2/`. Run `npm run migrate:tasks` to migrate/verify the configured vault explicitly. Task writes require the current revision. See [tasks and migration](docs/reference/tasks.md).
 
 ## Automate
 
@@ -468,6 +470,8 @@ Supported events:
 - `artifact.added`;
 - `task.added`.
 
+Task tools also publish `task.updated`, `task.status_changed`, `task.assigned`, `task.reordered` and `task.deleted`, consistently across UI, Assistant and MCP.
+
 Schedule uses 5-field cron:
 
 ```yaml
@@ -486,6 +490,7 @@ Main tools:
 - `create_task`;
 - `update_task`;
 - `toggle_task`;
+- `reorder_tasks`;
 - `delete_task`.
 
 ## MCP
@@ -531,6 +536,7 @@ MCP tools:
 - `create_task`;
 - `update_task`;
 - `toggle_task`;
+- `reorder_tasks`;
 - `delete_task`.
 
 Documents can be published to project `resources/` or `work/`, or a shared `docs/<folder>/` directory. Each Markdown document has a permanent five-character ID (`0-9 a-z`) in its frontmatter and a shareable UI link at `/d/<id>`. `read_file` accepts an ID, an HTTP share URL, `devsync://document/<id>`, or the existing project-relative path parameters.

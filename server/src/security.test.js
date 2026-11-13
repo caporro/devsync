@@ -39,7 +39,7 @@ const {
 } = await import("./agent-run-streams.js")
 const { resolveAgentTools } = await import("./agent-tools.js")
 const { summarizeToolPayload } = await import("./ai-logging.js")
-const { ensureDataDir } = await import("./storage.js")
+const { ensureDataDir, listTasks } = await import("./storage.js")
 const {
   diffAutomationWriteSnapshots,
   snapshotAutomationWritePaths,
@@ -271,10 +271,12 @@ test("legacy plan folders migrate to tasks folders", async () => {
 
     assert.equal(await pathExists(path.join(root, "plan")), false)
     assert.equal(await pathExists(path.join(root, "tasks", "do-thing.md")), true)
-    assert.equal(
-      parseFrontmatter(await fs.readFile(path.join(root, "tasks", "README.md"), "utf8")).body,
-      "# Tasks\n\n- [ ] [Do thing](do-thing.md)",
-    )
+    const [task] = await listTasks(`legacy-plan-migration-${suffix}`)
+    assert.equal(task.status, "todo")
+    const index = parseFrontmatter(await fs.readFile(path.join(root, "tasks", "README.md"), "utf8")).body
+    assert.match(index, /^# Tasks/)
+    assert.match(index, /\[Do thing\]\(do-thing\.md\)/)
+    assert.equal(await fs.readFile(path.join(root, "tasks", ".migration-v2", "README.md"), "utf8"), "# Plan\n\n- [ ] [Do thing](plan/do-thing.md)\n")
   }
 })
 

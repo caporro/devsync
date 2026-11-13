@@ -31,6 +31,17 @@ export type ProjectFile = {
   updatedAt: string
 }
 
+export const TASK_STATUSES = ["backlog", "todo", "doing", "pause", "done", "rejected"] as const
+export type TaskStatus = typeof TASK_STATUSES[number]
+export type Task = ProjectFile & {
+  status: TaskStatus
+  order: number
+  revision: string
+  done: boolean
+}
+export type TaskRecord = Task & { content: string }
+export type TaskPatch = { title?: string; status?: TaskStatus; owner?: string; deadline?: string; body?: string; content?: string }
+
 export type DocumentRecord = {
   id: string
   projectId: string | null
@@ -147,7 +158,7 @@ export type ProjectDetails = ProjectSummary & {
     resources: ProjectFile[]
     logs: ProjectFile[]
     work: ProjectFile[]
-    tasks?: ProjectFile[]
+    tasks?: Task[]
   }
   folders: {
     resources: ProjectFolder[]
@@ -155,10 +166,12 @@ export type ProjectDetails = ProjectSummary & {
   }
 }
 
-export type MyTask = ProjectFile & {
+export type ProjectTask = Task & {
   projectId: string
   projectName: string
 }
+
+export type MyTask = ProjectTask
 
 export type MyTaskGroup = {
   project: ProjectSummary
@@ -194,28 +207,13 @@ export type AddLogRequest = {
 
 export type CreateTaskRequest = {
   title: string
+  status?: TaskStatus
   owner?: string
   deadline?: string
   body?: string
   content?: string
   author?: string
   createdBy?: string
-}
-
-export type TaskIndexItem = {
-  path: string
-  done: boolean
-  title?: string
-  owner?: string
-  deadline?: string
-}
-
-export type FileIndexItem = {
-  path: string
-  done?: boolean
-  title?: string
-  owner?: string
-  deadline?: string
 }
 
 export type GitStepResult = {

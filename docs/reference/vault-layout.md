@@ -78,7 +78,7 @@ data/runtime/<vault>/chats/
 
 | File | Notes |
 | --- | --- |
-| `tasks/README.md` | Task index. |
+| `tasks/README.md` | Generated task index; status and manual order live in each task's frontmatter. |
 | `logs/activity/*` | Activity log segments. |
 | `work/*.md` | Assistant/automation/person-produced outputs. |
 

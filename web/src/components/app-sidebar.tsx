@@ -21,6 +21,7 @@ import {
   ChartRingIcon,
   CropIcon,
   GitBranchIcon,
+  KanbanIcon,
   Mail01Icon,
   NewsIcon,
 } from "@hugeicons/core-free-icons"
@@ -52,6 +53,7 @@ export function AppSidebar({
   onOpenGit,
   onOpenInbox,
   onOpenMyTasks,
+  onOpenKanban,
   onOpenNews,
   onOpenReadme,
   onOpenSystemLog,
@@ -74,6 +76,7 @@ export function AppSidebar({
   onOpenGit?: () => void
   onOpenInbox?: () => void
   onOpenMyTasks?: () => void
+  onOpenKanban?: () => void
   onOpenNews?: () => void
   onOpenReadme?: () => void
   onOpenSystemLog?: () => void
@@ -114,6 +117,13 @@ export function AppSidebar({
       icon: <HugeiconsIcon icon={ChartRingIcon} strokeWidth={2} />,
       isActive: activeView === "my-tasks",
       onSelect: onOpenMyTasks,
+    },
+    {
+      title: "Kanban",
+      url: "#",
+      icon: <HugeiconsIcon icon={KanbanIcon} strokeWidth={2} />,
+      isActive: activeView === "kanban",
+      onSelect: onOpenKanban,
     },
     {
       title: "System Log",

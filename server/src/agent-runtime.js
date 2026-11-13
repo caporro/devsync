@@ -167,7 +167,7 @@ export async function runAgent({ agent, projectId, messages, skills = [], eventS
   try {
     log?.info({ agentId: agent.id, model: agent.model }, "agent resolving model")
     const model = await resolveChatModel(agent.model)
-    const tools = resolveAgentTools(agent.tools, { ...scope, read: agent.read, write: agent.write, skills })
+    const tools = resolveAgentTools(agent.tools, { ...scope, read: agent.read, write: agent.write, skills, actor: "assistant", source: "assistant" })
     const systemPrompt = await buildSystemPrompt(agent, scope, skills)
 
     log?.info({

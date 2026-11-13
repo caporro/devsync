@@ -13,8 +13,11 @@ import type {
   GitActionResult,
   MentionInboxPage,
   MyTaskGroup,
+  ProjectTask,
   NewsPage,
-  TaskIndexItem,
+  Task,
+  TaskRecord,
+  TaskPatch,
   ProjectDetails,
   ProjectSummary,
   SystemLogPage,
@@ -210,6 +213,10 @@ export async function listUsers() {
 
 export async function listMyTasks() {
   return jsonRequest<{ items: MyTaskGroup[] }>("/api/my/tasks")
+}
+
+export async function listAllTasks() {
+  return jsonRequest<{ items: ProjectTask[] }>("/api/tasks")
 }
 
 export async function listMyInbox() {
@@ -539,7 +546,7 @@ export async function moveProjectEntry(projectId: string, from: string, to: stri
 }
 
 export async function createTask(projectId: string, body: CreateTaskRequest) {
-  return jsonRequest<{ name: string; path: string }>(
+  return jsonRequest<TaskRecord>(
     `/api/projects/${projectId}/tasks`,
     {
       method: "POST",
@@ -548,12 +555,12 @@ export async function createTask(projectId: string, body: CreateTaskRequest) {
   )
 }
 
-export async function updateTaskIndex(projectId: string, items: TaskIndexItem[]) {
-  return jsonRequest<{ path: string; size: number; content: string }>(
-    `/api/projects/${projectId}/tasks/readme`,
+export async function reorderTasks(projectId: string, tasks: Task[]) {
+  return jsonRequest<{ items: Task[] }>(
+    `/api/projects/${projectId}/tasks/order`,
     {
       method: "PATCH",
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items: tasks.map((task) => ({ path: task.path, expectedRevision: task.revision })) }),
     }
   )
 }
@@ -594,12 +601,16 @@ export async function updateGeneratedContent(projectId: string, path: string, co
   )
 }
 
-export async function updateTaskContent(projectId: string, path: string, content: string, author?: string) {
-  return jsonRequest<{ path: string; size: number; content: string }>(
+export async function readTask(projectId: string, path: string) {
+  return jsonRequest<TaskRecord>(`/api/projects/${projectId}/tasks/content?path=${encodeURIComponent(path)}`)
+}
+
+export async function updateTask(projectId: string, path: string, changes: TaskPatch, expectedRevision: string) {
+  return jsonRequest<TaskRecord>(
     `/api/projects/${projectId}/tasks/content?path=${encodeURIComponent(path)}`,
     {
       method: "PATCH",
-      body: JSON.stringify({ content, author }),
+      body: JSON.stringify({ ...changes, expectedRevision }),
     }
   )
 }
@@ -613,21 +624,12 @@ export async function deleteArtifact(projectId: string, path: string) {
   )
 }
 
-export async function toggleTask(projectId: string, path: string, done?: boolean) {
-  return jsonRequest<{ path: string; itemPath: string; done: boolean; content: string }>(
-    `/api/projects/${projectId}/tasks/toggle?path=${encodeURIComponent(path)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ done }),
-    }
-  )
-}
-
-export async function deleteTask(projectId: string, path: string) {
+export async function deleteTask(projectId: string, path: string, expectedRevision: string) {
   return jsonRequest<{ path: string; deleted: boolean }>(
     `/api/projects/${projectId}/tasks?path=${encodeURIComponent(path)}`,
     {
       method: "DELETE",
+      body: JSON.stringify({ expectedRevision }),
     }
   )
 }

@@ -3,7 +3,7 @@ import { z } from "zod"
 import {
   createDocument, updateDocument, readDocument, createTask, deleteTask,
   getProject, listTasks, listProjects, readTask, readProjectFile, readDocFile,
-  searchFiles, toggleTask, updateTask,
+  searchFiles, toggleTask, updateTask, reorderTasks, TASK_STATUSES,
 } from "./storage.js"
 
 function jsonResult(value) {
@@ -21,6 +21,9 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
   const location = { ref: ref.optional(), projectId: projectId.optional(), docId: z.string().min(1).optional(), path: filePath.optional() }
   function link(value) {
     return value?.url && baseUrl ? { ...value, url: new URL(value.url, baseUrl).href } : value
+  }
+  function taskLink(task, projectId) {
+    return link({ ...task, projectId, url: `/d/${task.id}`, ref: `devsync://document/${task.id}` })
   }
   function register(name, description, inputSchema, handler) {
     server.registerTool(name, { description, inputSchema }, async (input) => {
@@ -52,26 +55,89 @@ export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUB
     ...location, content: z.string(), title: z.string().min(1).optional(), tags: z.array(z.string()).optional(),
     expectedRevision: z.string().regex(/^[0-9a-f]{64}$/),
   }, async (input) => link(await updateDocument({ ...input, ...attribution })))
-  register("list_tasks", "List project tasks with owner, deadline and checkbox status from tasks/README.md.", { projectId }, ({ projectId }) => listTasks(projectId))
-  register("read_task", "Read a project task, including its checkbox status, owner, deadline, Markdown content, stable ID and revision.", { projectId, path: filePath }, async (input) => ({ ...await readTask(input.projectId, input.path), ...link(await readDocument(input)) }))
-  register("create_task", "Create a project task and add it to tasks/README.md. Creator is the authenticated token owner; owner is the task assignee.", {
-    projectId, title: z.string().min(1), owner: z.string().optional(), deadline: z.string().optional(), body: z.string().optional(),
-  }, async (input) => {
-    const task = await createTask(input.projectId, { ...input, ...attribution })
-    return { ...task, ...link(await readDocument({ projectId: input.projectId, path: task.path })) }
-  })
-  register("update_task", "Update a task's fields or full Markdown and keep its index aligned. Original creator and ID are preserved; editor comes from the token. Pass expectedRevision from read_task to reject stale writes.", {
-    projectId, path: filePath, title: z.string().optional(), owner: z.string().optional(), deadline: z.string().optional(),
-    body: z.string().optional(), content: z.string().optional(), expectedRevision: z.string().optional(),
-  }, async (input) => {
-    await updateTask(input.projectId, input.path, { ...input, ...attribution })
-    return link(await readDocument(input))
-  })
-  register("toggle_task", "Toggle or explicitly set a task's checkbox status in tasks/README.md. Does not change the task's content or assignee.", {
-    projectId, path: filePath, done: z.boolean().optional(),
-  }, (input) => toggleTask(input.projectId, input.path, input.done, attribution))
-  register("delete_task", "Permanently delete a project task and remove its index row. Use only when the user requests deletion.", {
-    projectId, path: filePath,
-  }, (input) => deleteTask(input.projectId, input.path, attribution))
+  const revision = z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .describe("Current task revision from read_task or list_tasks; stale writes are rejected.")
+  const status = z.enum(TASK_STATUSES)
+  register(
+    "list_tasks",
+    "List project tasks in manual order, with status, assignee, deadline and revision. Task files are the source of truth.",
+    { projectId },
+    ({ projectId }) => listTasks(projectId)
+  )
+  register(
+    "read_task",
+    "Read a complete Markdown task, its six-state status, manual order, stable ID and revision.",
+    { projectId, path: filePath },
+    async (input) => {
+      const task = await readTask(input.projectId, input.path)
+      return taskLink(task, input.projectId)
+    }
+  )
+  register(
+    "create_task",
+    "Create a self-contained Markdown task. Default status is backlog. Creator is the token owner; assigning an owner does not start execution.",
+    {
+      projectId,
+      title: z.string().min(1),
+      status: status.optional(),
+      owner: z.string().optional(),
+      deadline: z.string().optional(),
+      body: z.string().optional()
+    },
+    async (input) => {
+      const task = await createTask(input.projectId, { ...input, ...attribution })
+      return taskLink(task, input.projectId)
+    }
+  )
+  register(
+    "update_task",
+    "Update one task's fields or Markdown using its current revision. Preserves ID and original creator; records audit and automation events.",
+    {
+      projectId,
+      path: filePath,
+      title: z.string().optional(),
+      status: status.optional(),
+      owner: z.string().optional(),
+      deadline: z.string().optional(),
+      body: z.string().optional(),
+      content: z.string().optional(),
+      expectedRevision: revision
+    },
+    async (input) => taskLink(await updateTask(input.projectId, input.path, { ...input, ...attribution }), input.projectId)
+  )
+  register(
+    "toggle_task",
+    "Compatibility operation: mark done or reopen as todo. Prefer update_task with an explicit status.",
+    {
+      projectId,
+      path: filePath,
+      done: z.boolean().optional(),
+      expectedRevision: revision
+    },
+    (input) =>
+      toggleTask(input.projectId, input.path, input.done, { ...attribution, expectedRevision: input.expectedRevision })
+  )
+  register(
+    "reorder_tasks",
+    "Set the project's complete manual task order. Read list_tasks first and include each task's current revision.",
+    {
+      projectId,
+      items: z.array(z.object({ path: filePath, expectedRevision: revision }))
+    },
+    (input) => reorderTasks(input.projectId, { ...input, ...attribution })
+  )
+  register(
+    "delete_task",
+    "Permanently delete a task. Use only when the user requests deletion and provide its current revision.",
+    {
+      projectId,
+      path: filePath,
+      expectedRevision: revision
+    },
+    (input) => deleteTask(input.projectId, input.path, { ...attribution, expectedRevision: input.expectedRevision })
+  )
+
   return server
 }

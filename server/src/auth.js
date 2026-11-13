@@ -167,6 +167,18 @@ function publicUser(user, authMode) {
   }
 }
 
+export function resolveTaskOwner(value) {
+  const owner = String(value ?? "").trim()
+  if (!owner) return ""
+  const users = [...parseAuthUsers(process.env.AUTH_USERS ?? process.env.DEVSYNC_AUTH_USERS).values()]
+  const key = owner.toLowerCase()
+  const exact = users.find((user) => user.email.toLowerCase() === key)
+  if (exact) return exact.email
+  const matches = users.filter((user) => user.name.toLowerCase() === key)
+  // Preserve unknown or ambiguous legacy assignments instead of guessing.
+  return matches.length === 1 ? matches[0].email : owner.includes("@") ? key : owner
+}
+
 export function createPasswordHash(password) {
   const salt = crypto.randomBytes(16)
 

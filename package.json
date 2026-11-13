@@ -12,7 +12,8 @@
     "test:server": "node --test server/src/*.test.js",
     "start": "node server/src/index.js",
     "mcp": "node server/src/mcp.js",
-    "reindex": "node scripts/reindex-documents.mjs"
+    "reindex": "node scripts/reindex-documents.mjs",
+    "migrate:tasks": "node scripts/migrate-tasks.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.4",

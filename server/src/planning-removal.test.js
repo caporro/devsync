@@ -80,13 +80,13 @@ test("Tasks, My Tasks, legacy task aliases and MCP remain usable without Plannin
     await server.close()
   }
 
-  const updated = await app.inject({ method: "PATCH", url: `/api/projects/${projectId}/tasks/content${query}`, payload: { title: "Updated task", owner: "team", body: "Updated Markdown task" } })
+  const updated = await app.inject({ method: "PATCH", url: `/api/projects/${projectId}/tasks/content${query}`, payload: { title: "Updated task", owner: "team", body: "Updated Markdown task", expectedRevision: created.json().revision } })
   assert.equal(updated.statusCode, 200)
   assert.equal((await tasks()).json().items[0].items[0].title, "Updated task")
-  const toggled = await app.inject({ method: "PATCH", url: `/api/projects/${projectId}/plan/toggle${query}`, payload: { done: true } })
+  const toggled = await app.inject({ method: "PATCH", url: `/api/projects/${projectId}/plan/toggle${query}`, payload: { done: true, expectedRevision: updated.json().revision } })
   assert.equal(toggled.statusCode, 200)
   assert.equal((await tasks()).json().items[0].items[0].done, true)
-  const deleted = await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/tasks${query}` })
+  const deleted = await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/tasks${query}`, payload: { expectedRevision: toggled.json().revision } })
   assert.equal(deleted.statusCode, 200)
   assert.deepEqual((await tasks()).json().items, [])
 })

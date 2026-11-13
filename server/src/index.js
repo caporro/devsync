@@ -43,6 +43,9 @@ import {
   listNewsEntries,
   listDocs,
   listTasks,
+  listAllTasks,
+  readTask,
+  reorderTasks,
   listProjects,
   moveProjectEntry,
   readDocFile,
@@ -290,7 +293,9 @@ async function listMyTaskGroupsForUser(user) {
       const items = (await listTasks(project.id))
         .filter((item) => matchesAssignee(item.owner, identities))
         .sort((left, right) => {
-          if (left.done !== right.done) return left.done ? 1 : -1
+          const leftClosed = ["done", "rejected"].includes(left.status)
+          const rightClosed = ["done", "rejected"].includes(right.status)
+          if (leftClosed !== rightClosed) return leftClosed ? 1 : -1
           if ((left.deadline || "") !== (right.deadline || "")) {
             return (left.deadline || "9999-12-31").localeCompare(right.deadline || "9999-12-31")
           }
@@ -312,11 +317,6 @@ async function listMyTaskGroupsForUser(user) {
 async function createProjectTaskLegacy(request, reply) {
   const task = await createTask(request.params.projectId, request.body ?? {})
   reply.code(201).send(task)
-  void emitAutomationEvent({
-    type: "task.added",
-    projectId: request.params.projectId,
-    payload: { task },
-  }, request.log)
 }
 
 async function updateProjectTaskReadmeLegacy(request, reply) {
@@ -339,13 +339,13 @@ async function updateProjectTaskLegacyToggle(request, reply) {
       request.params.projectId,
       String(request.query.path ?? ""),
       request.body?.done,
-      requestAttribution(request)
+      { ...request.body, ...requestAttribution(request) }
     )
   )
 }
 
 async function deleteProjectTaskLegacy(request, reply) {
-  reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? ""), requestAttribution(request)))
+  reply.send(await deleteTask(request.params.projectId, String(request.query.path ?? ""), { ...request.body, ...requestAttribution(request) }))
 }
 
 await ensureDataDir()
@@ -477,6 +477,13 @@ app.get("/api/users", async (_request, reply) => {
 app.get("/api/my/tasks", async (request, reply) => {
   try {
     reply.send(await listMyTaskGroupsForUser(auth.currentUser(request) ?? { name: "team", email: "team", username: "team" }))
+  } catch (error) {
+    sendError(reply, error)
+  }
+})
+app.get("/api/tasks", async (_request, reply) => {
+  try {
+    reply.send({ items: await listAllTasks() })
   } catch (error) {
     sendError(reply, error)
   }
@@ -855,6 +862,16 @@ function withTaskErrorBoundary(operation) {
 
 app.post("/api/projects/:projectId/tasks", withTaskErrorBoundary(createProjectTaskLegacy))
 app.post("/api/projects/:projectId/plan", withTaskErrorBoundary(createProjectTaskLegacy))
+
+app.get("/api/projects/:projectId/tasks", withTaskErrorBoundary(async (request, reply) => {
+  reply.send({ items: await listTasks(request.params.projectId) })
+}))
+app.get("/api/projects/:projectId/tasks/content", withTaskErrorBoundary(async (request, reply) => {
+  reply.send(await readTask(request.params.projectId, String(request.query.path ?? "")))
+}))
+app.patch("/api/projects/:projectId/tasks/order", withTaskErrorBoundary(async (request, reply) => {
+  reply.send({ items: await reorderTasks(request.params.projectId, request.body ?? {}) })
+}))
 
 app.patch("/api/projects/:projectId/tasks/readme", withTaskErrorBoundary(updateProjectTaskReadmeLegacy))
 app.patch("/api/projects/:projectId/plan/readme", withTaskErrorBoundary(updateProjectTaskReadmeLegacy))

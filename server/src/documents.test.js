@@ -197,3 +197,13 @@ test("HTTP MCP uses the personal bearer token identity rather than client parame
   assert.match(response.body, /personal@example.com/)
   assert.doesNotMatch(response.body, /creator.*forged/)
 })
+
+test("concurrent MCP requests can authenticate with the same personal token", async () => {
+  const { token } = await createMcpTokenForUser({ email: "concurrent@example.com", name: "Concurrent User" })
+  const responses = await Promise.all(Array.from({ length: 8 }, (_, id) => app.inject({
+    method: "POST", url: "/mcp",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    payload: { jsonrpc: "2.0", id, method: "tools/list", params: {} },
+  })))
+  assert.deepEqual(responses.map((response) => response.statusCode), Array(8).fill(200))
+})

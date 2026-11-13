@@ -2,10 +2,14 @@ import "./env.js"
 import { createReadStream, createWriteStream, existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { randomUUID } from "node:crypto"
 import { pipeline } from "node:stream/promises"
 import { appendMentionEvents } from "./mentions.js"
 import { appendSystemLogEvent } from "./system-log.js"
-import { createDocumentIndex, withDocumentFields, withDocumentBody } from "./document-index.js"
+import { createDocumentIndex, documentRevision, withDocumentFields, withDocumentBody } from "./document-index.js"
+import { taskEvents } from "./task-events.js"
+import { resolveTaskOwner } from "./auth.js"
+import { parseFrontmatter as parseTaskFrontmatter } from "./markdown-definitions.js"
 
 const PROJECT_FILE = "project.json"
 const RESOURCES_DIR = "resources"
@@ -16,6 +20,18 @@ const PROJECT_DIRS = [RESOURCES_DIR, "logs", WORK_DIR, "tasks", "automations"]
 const LEGACY_ACTIVITY_LOG_FILE = "activity.md"
 const ACTIVITY_LOG_DIR = "activity"
 const TASKS_README_FILE = "README.md"
+export const TASK_STATUSES = ["backlog", "todo", "doing", "pause", "done", "rejected"]
+const TASK_INDEX_MARKER = "<!-- devsync:tasks-v2; generated from task files -->"
+const taskQueues = new Map()
+
+function withTaskLock(projectId, operation) {
+  assertProjectId(projectId)
+  const pending = (taskQueues.get(projectId) ?? Promise.resolve()).then(operation)
+  const settled = pending.catch(() => {})
+  taskQueues.set(projectId, settled)
+  void settled.then(() => { if (taskQueues.get(projectId) === settled) taskQueues.delete(projectId) })
+  return pending
+}
 const LEGACY_TASKS_README_FILE = "readme.md"
 const EXCALIDRAW_EXTENSION = ".excalidraw"
 const ACTIVITY_INLINE_MAX_CHARS = Number(process.env.DEVSYNC_ACTIVITY_INLINE_MAX_CHARS ?? 800)
@@ -869,7 +885,7 @@ function parseIndexSuffix(value) {
 
 function parseIndexItems(raw, dirName, readmeName) {
   const items = []
-  const matcher = /^-[ \t]+(?:\[([ xX])\][ \t]+)?\[([^\]\r\n]*)\]\(([^)\r\n]+)\)(?:[ \t]+(?:—|-)[ \t]*(.+?))?[ \t]*$/gm
+  const matcher = /^-[ \t]+(?:\[([ xX])\][ \t]+)?\[((?:\\.|[^\]\\\r\n])*)\]\(((?:\\.|[^)\\\r\n])+)\)(?:[ \t]+(?:—|-)[ \t]*(.+?))?[ \t]*$/gm
   let match
 
   while ((match = matcher.exec(String(raw)))) {
@@ -881,7 +897,7 @@ function parseIndexItems(raw, dirName, readmeName) {
     const suffix = parseIndexSuffix(match[4])
     items.push({
       path: itemPath,
-      title: match[2].trim(),
+      title: match[2].trim().replace(/\\([\\[\]])/g, "$1"),
       done: match[1] ? match[1].toLowerCase() === "x" : false,
       owner: suffix.owner,
       deadline: suffix.deadline,
@@ -895,71 +911,6 @@ function indexedFileTitle(file) {
   return file.title?.trim() || path.parse(file.name).name.replace(/[-_]+/g, " ").trim() || file.name
 }
 
-function buildIndexContent({
-  title,
-  files,
-  preferredItems = [],
-  dirName,
-  readmeName,
-  checkboxes = false,
-  owners = false,
-  deadlines = false,
-  preserveItemTitle = true,
-  preserveItemOwner = true,
-  preserveItemDeadline = true,
-}) {
-  const filesByPath = new Map(files.map((file) => [file.path, file]))
-  const used = new Set()
-  const ordered = []
-
-  for (const item of preferredItems) {
-    const itemPath = normalizeIndexPath(item.path, dirName, readmeName)
-    const file = filesByPath.get(itemPath)
-
-    if (!file || used.has(itemPath)) {
-      continue
-    }
-
-    ordered.push({
-      file,
-      done: Boolean(item.done),
-      title: String(item.title ?? "").trim() || null,
-      owner: String(item.owner ?? "").trim() || null,
-      deadline: String(item.deadline ?? "").trim() || null,
-    })
-    used.add(itemPath)
-  }
-
-  for (const file of files) {
-    if (!used.has(file.path)) {
-      ordered.push({ file, done: false, title: null, owner: null, deadline: null })
-    }
-  }
-
-  const lines = [`# ${title}`, ""]
-
-  for (const item of ordered) {
-    const prefix = checkboxes ? `[${item.done ? "x" : " "}] ` : ""
-    const itemTitle = preserveItemTitle && item.title && !isExcalidrawName(item.file.name)
-      ? item.title
-      : indexedFileTitle(item.file)
-    const owner = owners ? preserveItemOwner && item.owner ? item.owner : item.file.owner : ""
-    const deadline = deadlines ? preserveItemDeadline && item.deadline ? item.deadline : item.file.deadline : ""
-    const suffixParts = [
-      owner ? markdownLinkLabel(owner) : "",
-      deadline ? `due ${markdownLinkLabel(deadline)}` : "",
-    ].filter(Boolean)
-    const suffix = suffixParts.length ? ` — ${suffixParts.join(" — ")}` : ""
-    lines.push(`- ${prefix}[${markdownLinkLabel(itemTitle)}](${encodeURI(item.file.name)})${suffix}`)
-  }
-
-  return `${lines.join("\n").trimEnd()}\n`
-}
-
-function normalizeTaskIndexPath(value) {
-  return normalizeIndexPath(value, "tasks", TASKS_README_FILE.toLowerCase())
-}
-
 function parseTaskIndexItems(raw) {
   return parseIndexItems(raw, "tasks", TASKS_README_FILE.toLowerCase())
 }
@@ -968,32 +919,18 @@ function markdownLinkLabel(value) {
   return String(value).replaceAll("\\", "\\\\").replaceAll("]", "\\]").replace(/\s+/g, " ").trim()
 }
 
-function buildTaskIndexContent(files, preferredItems = []) {
-  return buildIndexContent({
-    title: "Tasks",
-    files,
-    preferredItems,
-    dirName: "tasks",
-    readmeName: TASKS_README_FILE.toLowerCase(),
-    checkboxes: true,
-    owners: true,
-    deadlines: true,
-    preserveItemTitle: false,
-    preserveItemOwner: false,
-    preserveItemDeadline: false,
-  })
-}
-
-async function readTaskIndexItems(projectId) {
-  try {
-    return parseTaskIndexItems(await safeReadTextFile(taskIndexPath(projectId)))
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return []
-    }
-
-    throw error
+function buildTaskIndexContent(files) {
+  const lines = ["# Tasks", "", TASK_INDEX_MARKER, ""]
+  for (const file of files) {
+    const suffix = [file.owner, file.deadline ? `due ${file.deadline}` : "", `status: ${file.status}`]
+      .filter(Boolean)
+      .map(markdownLinkLabel)
+      .join(" — ")
+    lines.push(
+      `- [${file.status === "done" ? "x" : " "}] [${markdownLinkLabel(indexedFileTitle(file))}](${encodeURI(file.name)}) — ${suffix}`
+    )
   }
+  return `${lines.join("\n").trimEnd()}\n`
 }
 
 // TODO: Remove this one-release plan/ -> tasks migration after existing vaults are migrated.
@@ -1050,54 +987,168 @@ async function migrateLegacyTaskDir(projectId) {
 
   const legacyReadme = path.join(tasksDir, LEGACY_TASKS_README_FILE)
   const taskReadme = path.join(tasksDir, TASKS_README_FILE)
-
   try {
-    let raw
-    try {
-      raw = await safeReadTextFile(taskReadme)
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error
-      raw = await safeReadTextFile(legacyReadme)
-    }
-    const next = raw
-      .replace(/^#[ \t]+Plan[ \t]*$/im, "# Tasks")
-      .replace(/\]\((?:plan\/)?([^)]+)\)/g, "]($1)")
-
-    await safeWriteTextFile(taskReadme, next)
+    await fs.access(taskReadme)
   } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error
-    }
+    if (error.code !== "ENOENT") throw error
+    try { await fs.rename(legacyReadme, taskReadme) } catch (cause) { if (cause.code !== "ENOENT") throw cause }
   }
 }
 
-export async function ensureTaskIndex(projectId) {
-  await ensureProjectDirs(projectId)
+function taskStatus(value, fallback = "backlog") {
+  const status = value === undefined ? fallback : String(value).trim()
+  if (!TASK_STATUSES.includes(status)) {
+    throw Object.assign(new Error(`Invalid task status: ${status}. Use ${TASK_STATUSES.join(", ")}`), {
+      statusCode: 400
+    })
+  }
+  return status
+}
 
-  const files = await listProjectFiles(projectId, "tasks")
-  const content = buildTaskIndexContent(files, await readTaskIndexItems(projectId))
-  const target = taskIndexPath(projectId)
+function taskOrder(value) {
+  const order = Number(value)
+  if (value === undefined || value === "" || !Number.isSafeInteger(order) || order < 0) {
+    throw Object.assign(new Error("Task order must be a non-negative integer"), { statusCode: 400 })
+  }
+  return order
+}
 
-  try {
-    const existing = await safeReadTextFile(target)
-    if (parseFrontmatter(existing).body.trim() === parseFrontmatter(content).body.trim()) {
+function requireTaskRevision(input) {
+  if (!/^[0-9a-f]{64}$/.test(input.expectedRevision ?? "")) {
+    throw Object.assign(new Error("Read the task first and provide expectedRevision"), { statusCode: 400 })
+  }
+}
+
+async function readTaskFiles(projectId) {
+  const files = (await listProjectFiles(projectId, "tasks")).filter(
+    (file) => isMarkdownName(file.name) && !file.name.startsWith(".")
+  )
+  return Promise.all(
+    files.map(async (file) => {
+      const content = await safeReadTextFile(resolveTaskFile(projectId, file.path))
+      const fields = parseTaskFrontmatter(content).data
       return {
-        path: `tasks/${TASKS_README_FILE}`,
-        content: existing,
+        ...file,
+        id: fields.id,
+        title: String(fields.title || titleFromMarkdown(parseTaskFrontmatter(content).body) || indexedFileTitle(file)),
+        owner: String(fields.owner ?? ""),
+        deadline: String(fields.deadline ?? ""),
+        status: fields.status,
+        order: fields.order === undefined ? undefined : taskOrder(fields.order),
+        revision: documentRevision(content),
+        content
       }
+    })
+  )
+}
+
+function sortTasks(files) {
+  return files.sort((a, b) => a.order - b.order || a.path.localeCompare(b.path))
+}
+
+async function backupLegacyTask(projectId, name, content) {
+  const directory = path.join(projectPath(projectId), "tasks", ".migration-v2")
+  await ensureSafeDir(directory)
+  const target = path.join(directory, name)
+  await assertSafeWritableFile(vaultDir, target)
+  await fs.writeFile(target, content, { flag: "wx" }).catch((error) => {
+    if (error.code !== "EEXIST") throw error
+  })
+}
+
+async function migrateTaskFile(target, content, expectedRevision) {
+  await assertSafeWritableFile(vaultDir, target)
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
+  const stat = await fs.stat(target)
+  try {
+    await fs.writeFile(temporary, content, { flag: "wx", mode: stat.mode })
+    if (documentRevision(await safeReadTextFile(target)) !== expectedRevision) {
+      throw Object.assign(new Error("Task changed during migration. Retry after reading it again."), {
+        statusCode: 409
+      })
     }
+    await fs.rename(temporary, target)
+  } finally {
+    await fs.rm(temporary, { force: true })
+  }
+}
+
+async function ensureTaskIndexUnlocked(projectId) {
+  await ensureProjectDirs(projectId)
+  const target = taskIndexPath(projectId)
+  let originalIndex = ""
+  try {
+    originalIndex = await safeReadTextFile(target)
   } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error
+    if (error.code !== "ENOENT") throw error
+    const lowerCaseIndex = path.join(projectPath(projectId), "tasks", LEGACY_TASKS_README_FILE)
+    try {
+      originalIndex = await safeReadTextFile(lowerCaseIndex)
+      await fs.rename(lowerCaseIndex, target)
+    } catch (cause) {
+      if (cause.code !== "ENOENT") throw cause
     }
   }
-
-  await safeWriteTextFile(target, content)
-
-  return {
-    path: `tasks/${TASKS_README_FILE}`,
-    content,
+  const legacy = !originalIndex.includes(TASK_INDEX_MARKER)
+  const indexItems = legacy ? parseTaskIndexItems(originalIndex) : []
+  const files = await readTaskFiles(projectId)
+  const byPath = new Map(files.map((file) => [file.path, file]))
+  const orderedPaths = [
+    ...new Set([
+      ...indexItems.map((item) => item.path).filter((item) => byPath.has(item)),
+      ...files.map((file) => file.path)
+    ])
+  ]
+  let nextOrder = Math.max(-1, ...files.map((file) => file.order ?? -1)) + 1
+  const changes = []
+  for (const [index, itemPath] of orderedPaths.entries()) {
+    const file = byPath.get(itemPath)
+    const previous = parseTaskFrontmatter(file.content).data
+    const item = indexItems.find((item) => item.path === itemPath)
+    const status = legacy && previous.status === "open" ? undefined : previous.status || undefined
+    const fields = {
+      status: taskStatus(status, item?.done ? "done" : "todo"),
+      order: file.order ?? (legacy ? index : nextOrder++),
+      owner: resolveTaskOwner(previous.owner || item?.owner || ""),
+      deadline: String(previous.deadline || item?.deadline || ""),
+      title: String(
+        previous.title || titleFromMarkdown(parseTaskFrontmatter(file.content).body) || item?.title || file.title
+      )
+    }
+    const changed = Object.entries(fields).some(([key, value]) => String(previous[key] ?? "") !== String(value))
+    if (changed) changes.push({ file, content: withDocumentFields(file.content, fields) })
   }
+  // Back up originals before the first migration write. A retry never replaces them.
+  if (legacy && originalIndex) await backupLegacyTask(projectId, "README.md", originalIndex)
+  for (const { file } of changes) await backupLegacyTask(projectId, file.name, file.content)
+  for (const { file, content } of changes) {
+    await migrateTaskFile(resolveTaskFile(projectId, file.path), content, file.revision)
+  }
+  // Migration and imported tasks may need IDs/cache updates. Normal reads must
+  // not rescan every document in the vault once for each project.
+  if (changes.length > 0 || files.some((file) => !file.id)) {
+    await documentIndex.reconcile()
+  }
+  const tasks = sortTasks(await readTaskFiles(projectId))
+  const body = buildTaskIndexContent(tasks)
+  if (parseFrontmatter(originalIndex).body.trim() !== body.trim()) {
+    let currentIndex = ""
+    try {
+      currentIndex = await safeReadTextFile(target)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
+    await safeWriteTextFile(
+      target,
+      withDocumentBody(currentIndex, body),
+      currentIndex ? { expectedRevision: documentRevision(currentIndex) } : {}
+    )
+  }
+  return { path: `tasks/${TASKS_README_FILE}`, content: await safeReadTextFile(target) }
+}
+
+export function ensureTaskIndex(projectId) {
+  return withTaskLock(projectId, () => ensureTaskIndexUnlocked(projectId))
 }
 
 function summarizeContent(content) {
@@ -1534,11 +1585,10 @@ export async function listProjects() {
 
     try {
       const metadata = await getProjectMetadata(entry.name)
-      await ensureTaskIndex(entry.name)
       const [resources, work, tasks, activity] = await Promise.all([
         listProjectFiles(entry.name, RESOURCES_DIR),
         listProjectFiles(entry.name, WORK_DIR),
-        listProjectFiles(entry.name, "tasks"),
+        listTasks(entry.name),
         getActivityLog(entry.name),
       ])
 
@@ -1676,7 +1726,7 @@ export async function getProject(projectId, options = {}) {
     listProjectFiles(projectId, RESOURCES_DIR),
     listProjectFiles(projectId, "logs"),
     listProjectFiles(projectId, WORK_DIR),
-    listProjectFiles(projectId, "tasks"),
+    listTasks(projectId),
     listProjectFolders(projectId, RESOURCES_DIR),
     listProjectFolders(projectId, WORK_DIR),
     getActivityLog(projectId, { files: options.activityFiles }),
@@ -1893,33 +1943,6 @@ function normalizeTaskDeadline(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? deadline : ""
 }
 
-function sanitizeTaskFields(fields = {}) {
-  return {
-    id: fields.id,
-    title: String(fields.title ?? "").trim(),
-    createdAt: String(fields.createdAt ?? "").trim(),
-    createdBy: String(fields.createdBy ?? "").trim(),
-    lastEdited: fields.lastEdited,
-    lastEditor: fields.lastEditor,
-    tags: fields.tags,
-    owner: String(fields.owner ?? "").trim(),
-    deadline: normalizeTaskDeadline(fields.deadline),
-  }
-}
-
-function taskContent(title, body, fields) {
-  return markdownWithFrontmatter(`# ${title}\n\n${String(body ?? "").trim()}`, sanitizeTaskFields(fields))
-}
-
-function taskBodyWithoutTitle(body) {
-  return String(body ?? "").trimStart().replace(/^#\s+.*(?:\r?\n|$)/, "").trim()
-}
-
-function normalizeTaskBody(body, title) {
-  const content = String(body ?? "").trim()
-  return content ? content : ""
-}
-
 async function appendMentionEventsForWrite(projectId, target, before, after, input = {}, targetType) {
   await appendMentionEvents({
     actor: String(input?.author ?? input?.editor ?? input?.creator ?? input?.createdBy ?? "team").trim() || "team",
@@ -1959,159 +1982,145 @@ async function appendTaskAssignedEvent({
   })
 }
 
-export async function createTask(projectId, input) {
-  await ensureProjectDirs(projectId)
-  await ensureTaskIndex(projectId)
-
-  const title = String(input?.title ?? "").trim()
-  const content = String(input?.content ?? input?.body ?? "").trim()
-  const created = nowIso()
-  const creator = String(input?.createdBy ?? input?.author ?? input?.creator ?? "team").trim() || "team"
-  const owner = String(input?.owner ?? "").trim()
-  const deadline = normalizeTaskDeadline(input?.deadline)
-
-  if (!title) {
-    throw Object.assign(new Error("Task title is required"), { statusCode: 400 })
-  }
-
-  const dir = path.join(projectPath(projectId), "tasks")
-  const target = await uniquePathWithNumberSuffix(dir, `${dateStamp(new Date(created))}-${slugify(title)}.md`)
-  const document = taskContent(title, normalizeTaskBody(content, title), {
-    title,
-    createdAt: created,
-    createdBy: creator,
-    owner,
-    deadline,
-  })
-  await safeWriteTextFile(target, document)
-  const relativePath = projectRelative(projectId, target)
-  await ensureTaskIndex(projectId)
-  await appendActivityEntry(projectId, {
-    createdAt: created,
-    author: creator,
-    title: `Created task ${title}`,
-    content: `Created task: ${title} (${relativePath}).`,
-  })
-  await touchProject(projectId)
-  await appendSystemLogEvent({
-    action: "task.created",
-    source: input?.source ?? "storage",
-    actor: creator,
+async function publishTaskEvent(type, projectId, task, input = {}) {
+  const event = {
+    type,
     projectId,
-    target: relativePath,
-    summary: `Created task ${title}`,
-  })
-  await appendMentionEventsForWrite(projectId, relativePath, "", document, input, "task")
-
-  return {
-    name: path.basename(target),
-    path: relativePath,
+    payload: { task },
+    actor: input.author ?? input.createdBy ?? "team",
+    source: input.source ?? "storage"
   }
+  await Promise.all(taskEvents.listeners("event").map((listener) => listener(event)))
 }
 
-async function updateTaskFieldsFromIndex(projectId, item, input = {}) {
-  const title = String(item?.title ?? "").trim()
-  const owner = String(item?.owner ?? "").trim()
-  const deadline = normalizeTaskDeadline(item?.deadline)
-
-  const fullPath = resolveTaskFile(projectId, item.path)
-  const before = await safeReadTextFile(fullPath)
-  const existing = parseFrontmatter(before)
-  const existingFields = sanitizeTaskFields(existing.fields)
-  const currentTitle = titleFromTaskContent(existing, path.parse(fullPath).name)
-  const nextTitle = title || currentTitle
-
-  if (currentTitle === nextTitle && existingFields.owner === owner && existingFields.deadline === deadline) {
-    return null
-  }
-
-  const body = taskBodyWithoutTitle(existing.body)
-  const content = taskContent(nextTitle, body, {
-    ...existingFields,
-    title: nextTitle,
-    owner,
-    deadline,
-    lastEditor: input.author ?? input.editor ?? "team",
-    lastEdited: nowIso(),
-  })
-
-  if (content === before) {
-    return null
-  }
-
-  await safeWriteTextFile(fullPath, content)
+async function taskRecord(projectId, relativePath) {
+  const fullPath = resolveTaskFile(projectId, relativePath)
+  const content = await safeReadTextFile(fullPath)
+  const fields = parseTaskFrontmatter(content).data
+  const stat = await fs.stat(fullPath)
+  const status = taskStatus(fields.status)
   return {
-    before,
-    after: content,
+    id: fields.id,
+    name: path.basename(fullPath),
+    kind: "tasks",
     path: projectRelative(projectId, fullPath),
-    title: nextTitle,
-    previousOwner: existingFields.owner,
-    nextOwner: owner,
+    title: String(fields.title || titleFromMarkdown(parseTaskFrontmatter(content).body) || path.parse(fullPath).name),
+    owner: String(fields.owner ?? ""),
+    deadline: String(fields.deadline ?? ""),
+    status,
+    order: taskOrder(fields.order),
+    done: status === "done",
+    createdAt: fields.createdAt ?? null,
+    author: String(fields.createdBy ?? fields.creator ?? ""),
+    tags: normalizeList(fields.tags),
+    updatedAt: stat.mtime.toISOString(),
+    size: stat.size,
+    revision: documentRevision(content),
+    content
   }
 }
 
-export async function updateTaskIndex(projectId, input = {}) {
-  await ensureProjectDirs(projectId)
-  await ensureTaskIndex(projectId)
+export function createTask(projectId, input = {}) {
+  return withTaskLock(projectId, async () => {
+    await ensureTaskIndexUnlocked(projectId)
+    const title = String(input.title ?? "").trim()
+    if (!title) throw Object.assign(new Error("Task title is required"), { statusCode: 400 })
+    const files = await readTaskFiles(projectId)
+    const created = nowIso()
+    const creator = String(input.createdBy ?? input.author ?? "team").trim() || "team"
+    const fields = {
+      title,
+      createdAt: created,
+      createdBy: creator,
+      owner: resolveTaskOwner(input.owner),
+      deadline: normalizeTaskDeadline(input.deadline),
+      status: taskStatus(input.status),
+      order: Math.max(-1, ...files.map((file) => file.order)) + 1
+    }
+    const target = await uniquePathWithNumberSuffix(
+      path.join(projectPath(projectId), "tasks"),
+      `${dateStamp(new Date(created))}-${slugify(title)}.md`
+    )
+    await safeWriteTextFile(
+      target,
+      markdownWithFrontmatter(`# ${title}\n\n${String(input.content ?? input.body ?? "").trim()}`, fields),
+      { createOnly: true }
+    )
+    const task = await taskRecord(projectId, projectRelative(projectId, target))
+    await ensureTaskIndexUnlocked(projectId)
+    await appendActivityEntry(projectId, {
+      createdAt: created,
+      author: creator,
+      title: `Created task ${title}`,
+      content: `Created task: ${title} (${task.path}).`
+    })
+    await touchProject(projectId)
+    await appendSystemLogEvent({
+      action: "task.created",
+      source: input.source ?? "storage",
+      actor: creator,
+      projectId,
+      target: task.path,
+      summary: `Created task ${title}`,
+      metadata: { status: task.status, owner: task.owner }
+    })
+    await appendMentionEventsForWrite(projectId, task.path, "", task.content, input, "task")
+    await publishTaskEvent("task.added", projectId, task, input)
+    return task
+  })
+}
 
-  const requestedItems = Array.isArray(input.items)
-    ? input.items.map((item) => ({
-        path: normalizeTaskIndexPath(item?.path),
-        title: String(item?.title ?? "").trim(),
-        done: Boolean(item?.done),
-        owner: String(item?.owner ?? "").trim(),
-        deadline: normalizeTaskDeadline(item?.deadline),
-      }))
-    : typeof input.content === "string"
-      ? parseTaskIndexItems(input.content)
-      : await readTaskIndexItems(projectId)
-
-  const taskUpdateDetails = (
-    await Promise.all(requestedItems.filter((item) => item.path).map((item) => updateTaskFieldsFromIndex(projectId, item, input)))
-  ).filter((detail) => detail && detail.path)
-
-  await Promise.all(taskUpdateDetails.map((detail) =>
-    appendMentionEventsForWrite(projectId, detail.path, detail.before, detail.after, input, "task")
-  ))
-  await Promise.all(
-    taskUpdateDetails
-      .filter((detail) => detail.previousOwner !== detail.nextOwner)
-      .map((detail) => appendTaskAssignedEvent({
-        actor: input?.author ?? input?.editor ?? "team",
-        projectId,
-        source: input?.source ?? "storage",
-        target: detail.path,
-        title: detail.title,
-        previousOwner: detail.previousOwner,
-        nextOwner: detail.nextOwner,
-      }))
+export async function updateTaskIndex() {
+  throw Object.assign(
+    new Error(
+      "Task index is generated and read-only. Update individual tasks or use tasks/order with current revisions."
+    ),
+    { statusCode: 400 }
   )
+}
 
-  const files = await listProjectFiles(projectId, "tasks")
-  const content = withDocumentFields(buildTaskIndexContent(files, requestedItems), { lastEditor: input.author ?? input.editor ?? "team", lastEdited: nowIso() })
-  const target = taskIndexPath(projectId)
-  const existingRaw = await safeReadTextFile(target).catch((error) => {
-    if (error.code === "ENOENT") return ""
-    throw error
+export function reorderTasks(projectId, input = {}) {
+  return withTaskLock(projectId, async () => {
+    await ensureTaskIndexUnlocked(projectId)
+    const files = sortTasks(await readTaskFiles(projectId))
+    const items = input.items
+    if (
+      !Array.isArray(items) ||
+      items.length !== files.length ||
+      new Set(items.map((item) => item.path)).size !== files.length
+    ) {
+      throw Object.assign(new Error("Task list changed. Reload before reordering."), { statusCode: 409 })
+    }
+    const byPath = new Map(files.map((file) => [file.path, file]))
+    for (const item of items) {
+      requireTaskRevision(item)
+      if (!byPath.has(item.path) || byPath.get(item.path).revision !== item.expectedRevision) {
+        throw Object.assign(new Error("Task changed. Reload before reordering."), { statusCode: 409 })
+      }
+    }
+    for (const [order, item] of items.entries()) {
+      const file = byPath.get(item.path)
+      if (file.order !== order) {
+        await safeWriteTextFile(
+          resolveTaskFile(projectId, item.path),
+          withDocumentFields(file.content, { order, lastEditor: input.author ?? "team", lastEdited: nowIso() }),
+          { expectedRevision: item.expectedRevision }
+        )
+      }
+    }
+    await ensureTaskIndexUnlocked(projectId)
+    await touchProject(projectId)
+    await appendSystemLogEvent({
+      action: "task.reordered",
+      source: input.source ?? "storage",
+      actor: input.author ?? "team",
+      projectId,
+      summary: "Reordered tasks",
+      metadata: { paths: items.map((item) => item.path) }
+    })
+    await publishTaskEvent("task.reordered", projectId, { paths: items.map((item) => item.path) }, input)
+    return listTaskRecordsUnlocked(projectId)
   })
-
-  await safeWriteTextFile(target, content)
-  await touchProject(projectId)
-  await appendSystemLogEvent({
-    action: "task_index.updated",
-    source: input?.source ?? "storage",
-    actor: input?.author ?? input?.editor ?? "team",
-    projectId,
-    target: `tasks/${TASKS_README_FILE}`,
-    summary: "Updated task index",
-  })
-  await appendMentionEventsForWrite(projectId, `tasks/${TASKS_README_FILE}`, existingRaw, content, input, "task")
-
-  return {
-    path: `tasks/${TASKS_README_FILE}`,
-    size: Buffer.byteLength(content, "utf8"),
-    content,
-  }
 }
 
 export async function addLog(projectId, input) {
@@ -2353,6 +2362,7 @@ function resolveArtifactFile(projectId, relativePath) {
 }
 
 function resolveTaskFile(projectId, relativePath) {
+  if (!/\.md$/i.test(relativePath)) throw Object.assign(new Error("Only Markdown task files are supported"), { statusCode: 400 })
   return resolveProjectSubdirFile(projectId, relativePath, "tasks", "Only task files can be changed", isTaskIndexPath)
 }
 
@@ -2380,26 +2390,27 @@ export async function deleteArtifact(projectId, relativePath, input = {}) {
   }
 }
 
-export async function deleteTask(projectId, relativePath, input = {}) {
-  await ensureProjectDirs(projectId)
-  await ensureTaskIndex(projectId)
-  const fullPath = resolveTaskFile(projectId, relativePath)
-  await safeUnlinkFile(fullPath)
-  await ensureTaskIndex(projectId)
-  await touchProject(projectId)
-  await appendSystemLogEvent({
-    action: "task.deleted",
-    source: input.source ?? "storage",
-    actor: input.author ?? "team",
-    projectId,
-    target: projectRelative(projectId, fullPath),
-    summary: `Deleted task ${path.basename(fullPath)}`,
+export function deleteTask(projectId, relativePath, input = {}) {
+  return withTaskLock(projectId, async () => {
+    requireTaskRevision(input)
+    await ensureTaskIndexUnlocked(projectId)
+    const task = await taskRecord(projectId, relativePath)
+    if (task.revision !== input.expectedRevision)
+      throw Object.assign(new Error("Task changed. Read it again before deleting."), { statusCode: 409 })
+    await safeUnlinkFile(resolveTaskFile(projectId, relativePath))
+    await ensureTaskIndexUnlocked(projectId)
+    await touchProject(projectId)
+    await appendSystemLogEvent({
+      action: "task.deleted",
+      source: input.source ?? "storage",
+      actor: input.author ?? "team",
+      projectId,
+      target: task.path,
+      summary: `Deleted task ${task.title}`
+    })
+    await publishTaskEvent("task.deleted", projectId, task, input)
+    return { path: task.path, deleted: true }
   })
-
-  return {
-    path: relativePath,
-    deleted: true,
-  }
 }
 
 export async function renameArtifact(projectId, relativePath, input = {}) {
@@ -2541,126 +2552,102 @@ async function updateMarkdownProjectFile(projectId, fullPath, input = {}, label 
   }
 }
 
-function titleFromTaskContent(parsed, fallback) {
-  return String(parsed.fields.title ?? "").trim()
-    || titleFromMarkdown(parsed.body)
-    || fallback
-}
-
-export async function updateTask(projectId, relativePath, input = {}) {
-  await ensureProjectDirs(projectId)
-  await ensureTaskIndex(projectId)
-  const fullPath = resolveTaskFile(projectId, relativePath)
-  await assertSafeExistingFile(vaultDir, fullPath)
-
-  if (path.extname(fullPath).toLowerCase() !== ".md") {
-    throw Object.assign(new Error("Only markdown tasks can be edited"), { statusCode: 400 })
+async function updateTaskUnlocked(projectId, relativePath, input = {}) {
+  requireTaskRevision(input)
+  await ensureTaskIndexUnlocked(projectId)
+  const existing = await taskRecord(projectId, relativePath)
+  if (existing.revision !== input.expectedRevision)
+    throw Object.assign(new Error("Task changed since it was read. Read it again before updating."), {
+      statusCode: 409
+    })
+  const incoming = typeof input.content === "string" ? parseTaskFrontmatter(input.content) : { data: {}, body: "" }
+  const values = {
+    ...incoming.data,
+    ...Object.fromEntries(
+      ["title", "owner", "deadline", "status"].filter((key) => input[key] !== undefined).map((key) => [key, input[key]])
+    )
   }
-
-  const existingRaw = await safeReadTextFile(fullPath)
-  const existing = parseFrontmatter(existingRaw)
-  const hasFullContent = typeof input.content === "string"
-  const incoming = hasFullContent
-    ? parseFrontmatter(input.content)
-    : {
-        fields: {
-          title: input.title,
-          owner: input.owner,
-          deadline: input.deadline,
-        },
-        body: input.body ?? input.content ?? existing.body,
-      }
-  const existingFields = sanitizeTaskFields(existing.fields)
-  const title = hasFullContent
-    ? titleFromMarkdown(incoming.body) || String(incoming.fields.title ?? "").trim() || existingFields.title || path.parse(fullPath).name
-    : titleFromTaskContent(incoming, existingFields.title || path.parse(fullPath).name)
-  const body = taskBodyWithoutTitle(incoming.body)
-  const nextFields = sanitizeTaskFields({
-    ...existingFields,
-    ...incoming.fields,
-    title,
-    owner: incoming.fields.owner === undefined ? existingFields.owner : incoming.fields.owner,
-    deadline: incoming.fields.deadline === undefined ? existingFields.deadline : incoming.fields.deadline,
+  const fields = { lastEditor: input.author ?? input.editor ?? "team", lastEdited: nowIso() }
+  if (input.title !== undefined || typeof input.content === "string") {
+    fields.title = String(input.title ?? titleFromMarkdown(incoming.body) ?? values.title ?? existing.title).trim()
+    if (!fields.title) throw Object.assign(new Error("Task title is required"), { statusCode: 400 })
+  }
+  if (values.status !== undefined) fields.status = taskStatus(values.status)
+  if (values.owner !== undefined) fields.owner = resolveTaskOwner(values.owner)
+  if (values.deadline !== undefined) fields.deadline = normalizeTaskDeadline(values.deadline)
+  // Order is changed only through reorderTasks, with a revision check for every task.
+  let content = existing.content
+  if (typeof input.content === "string") {
+    const header = input.content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[0]
+    if (header)
+      content = withDocumentFields(input.content, {
+        ...fields,
+        status: fields.status ?? existing.status,
+        owner: fields.owner ?? existing.owner,
+        deadline: fields.deadline ?? existing.deadline,
+        order: existing.order
+      })
+    else content = withDocumentBody(content, input.content)
+  } else if (input.body !== undefined) {
+    content = withDocumentBody(content, `\n# ${fields.title ?? existing.title}\n\n${String(input.body)}\n`)
+  } else if (fields.title && fields.title !== existing.title) {
+    const body = parseFrontmatter(content).body
+    content = withDocumentBody(content, body.replace(/^#\s+.*$/m, `# ${fields.title}`))
+  }
+  content = withDocumentFields(content, fields)
+  await safeWriteTextFile(resolveTaskFile(projectId, relativePath), content, {
+    expectedRevision: input.expectedRevision
   })
-
-  let content = taskContent(title, body, { ...nextFields, lastEdited: nowIso(), lastEditor: input.author ?? input.editor ?? "team" })
-  const previousOwner = existingFields.owner
-  const nextOwner = nextFields.owner
-
-  content = await safeWriteTextFile(fullPath, content, { expectedRevision: input.expectedRevision })
-  await ensureTaskIndex(projectId)
+  await ensureTaskIndexUnlocked(projectId)
+  const task = await taskRecord(projectId, relativePath)
   await touchProject(projectId)
   await appendSystemLogEvent({
     action: "task.updated",
-    source: input?.source ?? "storage",
-    actor: input?.author ?? input?.editor ?? "team",
-    projectId,
-    target: projectRelative(projectId, fullPath),
-    summary: `Updated task ${title}`,
-  })
-  await appendTaskAssignedEvent({
-    actor: input?.author ?? input?.editor ?? "team",
-    projectId,
-    source: input?.source ?? "storage",
-    target: projectRelative(projectId, fullPath),
-    title,
-    previousOwner,
-    nextOwner,
-  })
-  await appendMentionEventsForWrite(projectId, projectRelative(projectId, fullPath), existingRaw, content, input, "task")
-
-  return {
-    path: projectRelative(projectId, fullPath),
-    size: Buffer.byteLength(content, "utf8"),
-    content,
-  }
-}
-
-export async function toggleTask(projectId, relativePath, done, input = {}) {
-  await ensureProjectDirs(projectId)
-  await ensureTaskIndex(projectId)
-
-  const normalizedPath = normalizeTaskIndexPath(relativePath)
-  if (!normalizedPath) {
-    throw Object.assign(new Error("Task path is required"), { statusCode: 400 })
-  }
-
-  const raw = await safeReadTextFile(taskIndexPath(projectId))
-  const fileName = path.basename(normalizedPath)
-  const matcher = /^(-[ \t]+\[)([ xX])(\][ \t]+\[[^\]\r\n]*\]\(([^)\r\n]+)\)(?:[ \t]+(?:—|-)[ \t]*[^\r\n]*)?[ \t]*)$/gm
-  let changed = false
-  const content = raw.replace(matcher, (line, prefix, current, suffix, href) => {
-    const itemPath = normalizeTaskIndexPath(href)
-    if (itemPath !== normalizedPath) {
-      return line
-    }
-
-    changed = true
-    const nextDone = done === undefined ? current.toLowerCase() !== "x" : Boolean(done)
-    return `${prefix}${nextDone ? "x" : " "}${suffix}`
-  })
-
-  if (!changed) {
-    throw Object.assign(new Error(`Task not found: ${fileName}`), { statusCode: 404 })
-  }
-
-  await safeWriteTextFile(taskIndexPath(projectId), withDocumentFields(content, { lastEditor: input.author ?? "team", lastEdited: nowIso() }))
-  await touchProject(projectId)
-  await appendSystemLogEvent({
-    action: "task.toggled",
     source: input.source ?? "storage",
     actor: input.author ?? "team",
     projectId,
-    target: normalizedPath,
-    summary: `Toggled task ${fileName}`,
+    target: task.path,
+    summary: `Updated task ${task.title}`
   })
-
-  return {
-    path: `tasks/${TASKS_README_FILE}`,
-    itemPath: normalizedPath,
-    done: parseTaskIndexItems(content).find((item) => item.path === normalizedPath)?.done ?? Boolean(done),
-    content,
+  await appendTaskAssignedEvent({
+    actor: input.author ?? "team",
+    projectId,
+    source: input.source,
+    target: task.path,
+    title: task.title,
+    previousOwner: existing.owner,
+    nextOwner: task.owner
+  })
+  if (existing.status !== task.status) {
+    await appendSystemLogEvent({
+      action: "task.status_changed",
+      source: input.source ?? "storage",
+      actor: input.author ?? "team",
+      projectId,
+      target: task.path,
+      summary: `Task ${task.title}: ${existing.status} → ${task.status}`,
+      metadata: { previousStatus: existing.status, status: task.status }
+    })
+    await publishTaskEvent("task.status_changed", projectId, task, input)
   }
+  await appendMentionEventsForWrite(projectId, task.path, existing.content, task.content, input, "task")
+  if (existing.owner !== task.owner) await publishTaskEvent("task.assigned", projectId, task, input)
+  await publishTaskEvent("task.updated", projectId, task, input)
+  return task
+}
+
+export function updateTask(projectId, relativePath, input = {}) {
+  return withTaskLock(projectId, () => updateTaskUnlocked(projectId, relativePath, input))
+}
+
+export function toggleTask(projectId, relativePath, done, input = {}) {
+  return withTaskLock(projectId, async () => {
+    requireTaskRevision(input)
+    await ensureTaskIndexUnlocked(projectId)
+    const existing = await taskRecord(projectId, relativePath)
+    const nextDone = done === undefined ? existing.status !== "done" : Boolean(done)
+    return updateTaskUnlocked(projectId, relativePath, { ...input, status: nextDone ? "done" : "todo" })
+  })
 }
 
 export async function readProjectFile(projectId, relativePath) {
@@ -2695,44 +2682,45 @@ export async function readProjectFileBuffer(projectId, relativePath) {
   }
 }
 
-export async function listTasks(projectId) {
-  await ensureTaskIndex(projectId)
-  const [files, items] = await Promise.all([
-    listProjectFiles(projectId, "tasks"),
-    readTaskIndexItems(projectId),
-  ])
-  const itemByPath = new Map(items.map((item) => [item.path, item]))
+async function listTaskRecordsUnlocked(projectId) {
+  return sortTasks(await readTaskFiles(projectId)).map(({ content, ...file }) => ({
+    ...file,
+    done: file.status === "done"
+  }))
+}
 
-  return files.map((file) => {
-    const item = itemByPath.get(file.path)
-    return {
-      ...file,
-      title: item?.title || file.title || indexedFileTitle(file),
-      owner: item?.owner || file.owner || "",
-      deadline: item?.deadline || file.deadline || "",
-      done: Boolean(item?.done),
-    }
+export function listTasks(projectId) {
+  return withTaskLock(projectId, async () => {
+    await ensureTaskIndexUnlocked(projectId)
+    return listTaskRecordsUnlocked(projectId)
   })
 }
 
-export async function readTask(projectId, relativePath) {
-  await ensureTaskIndex(projectId)
-  const fullPath = resolveTaskFile(projectId, relativePath)
-  await assertSafeExistingFile(vaultDir, fullPath)
-
-  const content = await safeReadTextFile(fullPath)
-  const parsed = parseFrontmatter(content)
-  const indexItem = (await readTaskIndexItems(projectId))
-    .find((item) => item.path === projectRelative(projectId, fullPath))
-
-  return {
-    path: projectRelative(projectId, fullPath),
-    title: titleFromTaskContent(parsed, path.parse(fullPath).name),
-    owner: String(parsed.fields.owner ?? indexItem?.owner ?? "").trim(),
-    deadline: String(parsed.fields.deadline ?? indexItem?.deadline ?? "").trim(),
-    done: Boolean(indexItem?.done),
-    content,
+export async function listAllTasks() {
+  await ensureDataDir()
+  const entries = (await fs.readdir(dataDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  const items = []
+  // Migration reconciles document IDs across the vault, so visit projects in order.
+  for (const entry of entries) {
+    const project = await getProjectMetadata(entry.name)
+    items.push(
+      ...(await listTasks(project.id)).map((task) => ({
+        ...task,
+        projectId: project.id,
+        projectName: project.name
+      }))
+    )
   }
+  return items
+}
+
+export function readTask(projectId, relativePath) {
+  return withTaskLock(projectId, async () => {
+    await ensureTaskIndexUnlocked(projectId)
+    return taskRecord(projectId, relativePath)
+  })
 }
 
 export async function readDocFile(docId, relativePath) {
@@ -2751,6 +2739,7 @@ export async function readDocument(input = {}) {
     throw Object.assign(new Error("Specify ref, or exactly one of projectId/docId with path"), { statusCode: 400 })
   }
   if (typeof input.path !== "string" || !input.path) throw Object.assign(new Error("Document path is required"), { statusCode: 400 })
+  if (input.projectId && input.path.startsWith("tasks/")) await ensureTaskIndex(input.projectId)
   const target = input.projectId ? resolveProjectFile(input.projectId, input.path) : resolveDocFile(input.docId, input.path)
   await assertSafeExistingFile(vaultDir, target)
   return documentIndex.byPath(target)

@@ -32,6 +32,9 @@ export const BASE_ASSISTANT_PROMPT = [
   "- Put raw or source material in resources/.",
   "- Put generated or refined deliverables in work/.",
   "- Put operational next steps in tasks/.",
+  "- Use task tools to create, edit, reorder or delete tasks; tasks/README.md is generated and read-only.",
+  "- Task statuses are backlog, todo, doing, pause, done and rejected. New tasks default to backlog.",
+  "- Read a task before changing it and pass its revision as expectedRevision. Assignment does not start execution.",
   "- Append short readable updates to logs/activity/ when an activity log tool or workflow is available.",
   "- If an activity entry would be long, save it as Markdown in resources/ or work/ and keep only a short linked entry in the log.",
   "",
@@ -126,7 +129,7 @@ function normalizeAssistantConfig() {
     title: "Assistant",
     description: "Main Devsync chat assistant.",
     model: String(model).trim(),
-    tools: ["filesystem", "use_skill"],
+    tools: ["filesystem", "use_skill", "list_tasks", "read_task", "create_task", "update_task", "toggle_task", "reorder_tasks", "delete_task"],
     read: ["**/*"],
     write: ["tasks/**", "resources/**", "work/**", "automations/**"],
   }

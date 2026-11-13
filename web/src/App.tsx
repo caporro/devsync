@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, ReactNode, RefObject } from "react"
+import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode, RefObject } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -10,7 +10,6 @@ import {
   Copy01Icon,
   DarkModeIcon,
   Delete02Icon,
-  DragDropVerticalIcon,
   DrawingModeIcon,
   Edit02Icon,
   FileCodeIcon,
@@ -33,6 +32,8 @@ import {
   Txt01Icon,
 } from "@hugeicons/core-free-icons"
 
+import { ProjectTasksView, TaskStatusSelect, TaskOwnerSelect } from "@/components/project-tasks"
+import { KanbanBoard } from "@/components/kanban-board"
 import { DocumentSearch } from "@/components/document-search"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatThought } from "@/components/chat-thought"
@@ -122,6 +123,7 @@ import {
   listDocs,
   listMcpTokens,
   listMyTasks,
+  listAllTasks,
   listProjects,
   listUsers,
   listAutomations,
@@ -136,23 +138,25 @@ import {
   updateArtifactContent,
   updateExcalidrawArtifact,
   updateGeneratedContent,
-  updateTaskIndex,
-  updateTaskContent,
+  reorderTasks,
+  readTask,
+  updateTask,
   updateProject,
   uploadArtifact,
   runAutomation,
   sendAgentMessage,
-  toggleTask,
   uploadAgentAttachment,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { ActivityEntry, DocsSummary, FileIndexItem, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, ProjectDetails, ProjectFile, ProjectFolder, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
+import type { ActivityEntry, DocsSummary, Task, TaskPatch, TaskStatus, ProjectTask, GitActionResult, MentionInboxItem, MyTask, MyTaskGroup, NewsEntry, ProjectDetails, ProjectFile, ProjectFolder, ProjectSummary, SystemLogEvent } from "@/domain/devsync"
 import type { AgentAttachment, AgentMessage, AgentRun, AgentRunEvent, AgentThread, AgentThreadHistory, AuthStatus, AuthUser, McpToken, AutomationDefinition } from "@/lib/api"
 
 const EMPTY_PROJECTS: ProjectSummary[] = []
 const EMPTY_DOCS: DocsSummary[] = []
 const EMPTY_FILES: ProjectFile[] = []
-const TASK_INDEX_PATH = "tasks/README.md"
+const EMPTY_TASKS: Task[] = []
+const EMPTY_PROJECT_TASKS: ProjectTask[] = []
+const KANBAN_PROJECT_FILTER_KEY = "devsync:kanban:project-filter"
 const CHAT_MAX_WIDTH = "max-w-[760px]"
 const CHAT_THREAD_MENU_VALUE = "threads"
 const THREAD_TITLE_MAX_LENGTH = 36
@@ -174,7 +178,7 @@ const MarkdownViewer = lazy(() =>
   }))
 )
 
-type MainView = "document" | "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git"
+type MainView = "document" | "activity" | "system-log" | "chat" | "agents" | "artifacts" | "artifact" | "generated-file" | "config" | "readme" | "placeholder" | "kanban" | "tasks" | "task" | "my-tasks" | "inbox" | "news" | "docs" | "git"
 type AppRoute = {
   documentId?: string | null
   mainView: MainView
@@ -386,6 +390,10 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     return { ...emptyRoute("document"), documentId: parts[1] }
   }
 
+  if (parts[0] === "kanban") {
+    return { ...emptyRoute("kanban"), projectId: query.get("project") || null }
+  }
+
   if (parts[0] === "projects" && parts[1]) {
     const projectId = decodePathPart(parts[1])
     const section = parts[2] ?? "activity"
@@ -398,6 +406,10 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
     if (section === "tasks") {
       const taskPath = scopedRouteFilePath("tasks", parts.slice(3))
       return { ...emptyRoute(taskPath ? "task" : "tasks"), projectId, taskPath }
+    }
+
+    if (section === "kanban") {
+      return { ...emptyRoute("kanban"), projectId }
     }
 
     if (section === "agents" || section === "assistant") {
@@ -477,6 +489,7 @@ function parseAppRoute(pathname = window.location.pathname, search = window.loca
 }
 
 function buildAppPath(route: AppRoute) {
+  if (route.mainView === "kanban") return route.projectId ? `/kanban?project=${encodePathPart(route.projectId)}` : "/kanban"
   if (route.mainView === "document" && route.documentId) return `/d/${route.documentId}`
   if (route.mainView === "docs") {
     if (!route.docId) {
@@ -767,96 +780,6 @@ function SystemLogView({
       )}
     </section>
   )
-}
-
-type FileIndexRow = FileIndexItem & {
-  title: string
-  file: ProjectFile
-  done: boolean
-  owner?: string
-  deadline?: string
-}
-type DropPlacement = "before" | "after"
-type DropTarget = {
-  path: string
-  placement: DropPlacement
-}
-
-function normalizeProjectIndexPath(value: string, dirName: string) {
-  const clean = value.trim().replace(/^\.?\//, "").replace(new RegExp(`^${dirName}/`), "")
-  let decoded = clean
-
-  try {
-    decoded = decodeURIComponent(clean)
-  } catch {
-    decoded = clean
-  }
-
-  const fileName = decoded.split("/").filter(Boolean).pop() ?? ""
-  return fileName ? `${dirName}/${fileName}` : ""
-}
-
-function parseIndexSuffix(value: string | undefined) {
-  const parts = String(value ?? "")
-    .split(/\s+(?:—|-)\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-  let owner = ""
-  let deadline = ""
-
-  for (const part of parts) {
-    const due = part.match(/^(?:due|deadline):?\s*(\d{4}-\d{2}-\d{2})$/i)
-    if (due) {
-      deadline = due[1]
-    } else if (!owner) {
-      owner = part
-    }
-  }
-
-  return { owner, deadline }
-}
-
-function parseFileIndex(content: string | undefined, files: ProjectFile[], dirName: string): FileIndexRow[] {
-  const fileByPath = new Map(files.map((file) => [file.path, file]))
-  const used = new Set<string>()
-  const rows: FileIndexRow[] = []
-  const matcher = /^-[ \t]+(?:\[([ xX])\][ \t]+)?\[([^\]\r\n]*)\]\(([^)\r\n]+)\)(?:[ \t]+(?:—|-)[ \t]*(.+?))?[ \t]*$/gm
-  let match
-
-  while ((match = matcher.exec(content ?? ""))) {
-    const filePath = normalizeProjectIndexPath(match[3], dirName)
-    const file = fileByPath.get(filePath)
-
-    if (!file || used.has(filePath)) {
-      continue
-    }
-
-    const suffix = parseIndexSuffix(match[4])
-    rows.push({
-      path: filePath,
-      title: isExcalidrawFile(file.name) ? displayFileTitle(file) : match[2].trim() || displayFileTitle(file),
-      done: match[1]?.toLowerCase() === "x",
-      owner: suffix.owner || file.owner || "",
-      deadline: suffix.deadline || file.deadline || "",
-      file,
-    })
-    used.add(filePath)
-  }
-
-  for (const file of files) {
-    if (!used.has(file.path)) {
-      rows.push({
-        path: file.path,
-        title: displayFileTitle(file),
-        done: false,
-        owner: file.owner || "",
-        deadline: file.deadline || "",
-        file,
-      })
-    }
-  }
-
-  return rows
 }
 
 function formatActivityDate(value: string) {
@@ -2705,13 +2628,13 @@ function MyTasksView({
   isLoading,
   isSaving,
   onOpenItem,
-  onToggleItem,
+  onStatusChange,
 }: {
   groups: MyTaskGroup[]
   isLoading: boolean
   isSaving: boolean
   onOpenItem: (item: MyTask) => void
-  onToggleItem: (item: MyTask, done: boolean) => void
+  onStatusChange: (item: MyTask, status: TaskStatus) => void
 }) {
   const total = groups.reduce((count, group) => count + group.items.length, 0)
 
@@ -2743,17 +2666,11 @@ function MyTasksView({
                   className="flex min-w-0 items-center gap-3 border-b border-border/70 px-3 py-2 last:border-b-0"
                   key={`${item.projectId}:${item.path}`}
                 >
-                  <input
-                    checked={Boolean(item.done)}
-                    className="size-4 shrink-0 accent-foreground"
-                    disabled={isSaving}
-                    onChange={(event) => onToggleItem(item, event.currentTarget.checked)}
-                    type="checkbox"
-                  />
+                  <TaskStatusSelect value={item.status} disabled={isSaving} onChange={(status) => onStatusChange(item, status)} />
                   <button
                     className={cn(
                       "min-w-0 flex-1 text-left text-sm font-medium text-foreground hover:underline",
-                      item.done && "text-muted-foreground line-through"
+                      ["done", "rejected"].includes(item.status) && "text-muted-foreground line-through"
                     )}
                     onClick={() => onOpenItem(item)}
                     type="button"
@@ -3145,327 +3062,6 @@ function MoveEntryDialog({
   )
 }
 
-function FileIndexView({
-  checkboxes = false,
-  content,
-  addLabel = "Add",
-  emptyLabel = "Empty",
-  files,
-  indexPath,
-  isLoading,
-  isSaving,
-  ownerOptions = [],
-  title,
-  onAdd,
-  onCreateDrawing,
-  onOpenFile,
-  onSaveItems,
-}: {
-  checkboxes?: boolean
-  content: string | undefined
-  addLabel?: string
-  emptyLabel?: string
-  files: ProjectFile[]
-  indexPath: string
-  isLoading: boolean
-  isSaving: boolean
-  ownerOptions?: string[]
-  title: string
-  onAdd: () => void
-  onCreateDrawing?: () => void
-  onOpenFile: (path: string) => void
-  onSaveItems: (items: FileIndexItem[]) => Promise<void>
-}) {
-  const dirName = indexPath.split("/")[0] ?? ""
-  const parsedItems = useMemo(() => parseFileIndex(content, files, dirName), [content, dirName, files])
-  const [items, setItems] = useState<FileIndexRow[]>(parsedItems)
-  const [draggedPath, setDraggedPath] = useState<string | null>(null)
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
-  const [editingDeadlinePath, setEditingDeadlinePath] = useState<string | null>(null)
-  const [editingOwnerPath, setEditingOwnerPath] = useState<string | null>(null)
-
-  useEffect(() => {
-    setItems(parsedItems)
-  }, [parsedItems])
-
-  function persist(nextItems: FileIndexRow[]) {
-    setItems(nextItems)
-    void onSaveItems(nextItems.map((item) => ({
-      path: item.path,
-      done: item.done,
-      title: item.title,
-      owner: item.owner,
-      deadline: item.deadline,
-    }))).catch(() => {
-      setItems(parsedItems)
-    })
-  }
-
-  function handleToggle(path: string) {
-    persist(items.map((item) => item.path === path ? { ...item, done: !item.done } : item))
-  }
-
-  function handleTitleDraft(path: string, title: string) {
-    setItems(items.map((item) => item.path === path ? { ...item, title } : item))
-  }
-
-  function handleTitleCommit(path: string, value: string) {
-    const title = value.trim()
-    const current = items.find((item) => item.path === path)
-
-    if (!current) {
-      return
-    }
-
-    if (!title) {
-      const fallback = parsedItems.find((item) => item.path === path)?.title || displayFileTitle(current.file)
-      setItems(items.map((item) => item.path === path ? { ...item, title: fallback } : item))
-      return
-    }
-
-    if (title === parsedItems.find((item) => item.path === path)?.title) {
-      setItems(items.map((item) => item.path === path ? { ...item, title } : item))
-      return
-    }
-
-    persist(items.map((item) => item.path === path ? { ...item, title } : item))
-  }
-
-  function handleDeadlineChange(path: string, deadline: string) {
-    persist(items.map((item) => item.path === path ? { ...item, deadline } : item))
-    setEditingDeadlinePath(null)
-  }
-
-  function handleOwnerChange(path: string, owner: string) {
-    persist(items.map((item) => item.path === path ? { ...item, owner } : item))
-    setEditingOwnerPath(null)
-  }
-
-  function handleDragStart(event: DragEvent<HTMLButtonElement>, path: string) {
-    setDraggedPath(path)
-    setDropTarget(null)
-    event.dataTransfer.effectAllowed = "move"
-    event.dataTransfer.setData("text/plain", path)
-  }
-
-  function handleDragOver(event: DragEvent<HTMLDivElement>, targetPath: string) {
-    event.preventDefault()
-    event.dataTransfer.dropEffect = "move"
-
-    const box = event.currentTarget.getBoundingClientRect()
-    const placement: DropPlacement = event.clientY < box.top + box.height / 2 ? "before" : "after"
-    setDropTarget({ path: targetPath, placement })
-  }
-
-  function handleDrop(event: DragEvent<HTMLDivElement>, targetPath: string) {
-    event.preventDefault()
-    const sourcePath = draggedPath || event.dataTransfer.getData("text/plain")
-    const placement = dropTarget?.path === targetPath ? dropTarget.placement : "before"
-
-    if (!sourcePath || sourcePath === targetPath) {
-      setDraggedPath(null)
-      setDropTarget(null)
-      return
-    }
-
-    const fromIndex = items.findIndex((item) => item.path === sourcePath)
-    const targetIndex = items.findIndex((item) => item.path === targetPath)
-
-    if (fromIndex === -1 || targetIndex === -1) {
-      setDraggedPath(null)
-      setDropTarget(null)
-      return
-    }
-
-    const nextItems = [...items]
-    const [moved] = nextItems.splice(fromIndex, 1)
-    const nextTargetIndex = nextItems.findIndex((item) => item.path === targetPath)
-    nextItems.splice(placement === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, moved)
-    setDraggedPath(null)
-    setDropTarget(null)
-    persist(nextItems)
-  }
-
-  return (
-    <section className="mx-auto max-w-3xl">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">{title}</h1>
-          <div className="mt-1 text-xs text-muted-foreground">{indexPath}</div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {onCreateDrawing ? (
-            <Button disabled={isSaving} onClick={onCreateDrawing} type="button" variant="outline">
-              <HugeiconsIcon icon={DrawingModeIcon} strokeWidth={2} />
-              New drawing
-            </Button>
-          ) : null}
-          <Button disabled={isSaving} onClick={onAdd} type="button" variant="outline">
-            <HugeiconsIcon icon={AddCircleIcon} strokeWidth={2} />
-            {addLabel}
-          </Button>
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading...</div>
-      ) : items.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          {emptyLabel}
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
-          {items.map((item) => (
-            <div
-              className={cn(
-                "relative flex min-w-0 items-center gap-3 border-b border-border/70 px-3 py-2 last:border-b-0",
-                draggedPath === item.path && "opacity-60"
-              )}
-              key={item.path}
-              onDragOver={(event) => handleDragOver(event, item.path)}
-              onDrop={(event) => handleDrop(event, item.path)}
-            >
-              {dropTarget?.path === item.path ? (
-                <span
-                  className={cn(
-                    "pointer-events-none absolute left-3 right-3 h-0.5 rounded-full bg-foreground",
-                    dropTarget.placement === "before" ? "top-0" : "bottom-0"
-                  )}
-                />
-              ) : null}
-              <button
-                className="inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
-                disabled={isSaving}
-                draggable={!isSaving}
-                onDragEnd={() => {
-                  setDraggedPath(null)
-                  setDropTarget(null)
-                }}
-                onDragStart={(event) => handleDragStart(event, item.path)}
-                title="Reorder item"
-                type="button"
-              >
-                <HugeiconsIcon icon={DragDropVerticalIcon} strokeWidth={2} className="size-4" />
-              </button>
-              {checkboxes ? (
-                <input
-                  checked={item.done}
-                  className="size-4 shrink-0 accent-foreground"
-                  disabled={isSaving}
-                  onChange={() => handleToggle(item.path)}
-                  type="checkbox"
-                />
-              ) : null}
-              {checkboxes ? (
-                <div className="min-w-0 flex-1">
-                  <Input
-                    aria-label="Task title"
-                    className={cn(
-                      "h-8 min-w-0 border-transparent bg-transparent px-2 text-sm font-medium shadow-none hover:border-input focus-visible:border-ring",
-                      item.done && "text-muted-foreground line-through"
-                    )}
-                    disabled={isSaving}
-                    onBlur={(event) => handleTitleCommit(item.path, event.currentTarget.value)}
-                    onChange={(event) => handleTitleDraft(item.path, event.currentTarget.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.currentTarget.blur()
-                      }
-                    }}
-                    value={item.title}
-                  />
-                </div>
-              ) : (
-                <button
-                  className="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground hover:underline"
-                  onClick={() => onOpenFile(item.path)}
-                  type="button"
-                >
-                  {item.title}
-                </button>
-              )}
-              {checkboxes ? (
-                editingDeadlinePath === item.path ? (
-                  <Input
-                    aria-label="Task deadline"
-                    autoComplete="off"
-                    autoFocus
-                    className="h-8 w-32 shrink-0 px-2 text-xs sm:w-36"
-                    disabled={isSaving}
-                    onBlur={() => setEditingDeadlinePath(null)}
-                    onChange={(event) => handleDeadlineChange(item.path, event.target.value)}
-                    type="date"
-                    value={item.deadline ?? ""}
-                  />
-                ) : (
-                  <button
-                    className={cn(
-                      "h-8 w-32 shrink-0 truncate rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground sm:w-36",
-                      item.deadline && "text-foreground"
-                    )}
-                    disabled={isSaving}
-                    onClick={() => setEditingDeadlinePath(item.path)}
-                    type="button"
-                  >
-                    {item.deadline || "No date"}
-                  </button>
-                )
-              ) : null}
-              {checkboxes ? (
-                editingOwnerPath === item.path ? (
-                  <select
-                    aria-label="Task owner"
-                    autoFocus
-                    className="h-8 w-36 shrink-0 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                    disabled={isSaving}
-                    onBlur={() => setEditingOwnerPath(null)}
-                    onChange={(event) => handleOwnerChange(item.path, event.target.value)}
-                    value={item.owner ?? ""}
-                  >
-                    <option value="">Unassigned</option>
-                    {ownerOptions.map((owner) => (
-                      <option key={owner} value={owner}>
-                        {owner}
-                      </option>
-                    ))}
-                    {item.owner && !ownerOptions.includes(item.owner) ? (
-                      <option value={item.owner}>{item.owner}</option>
-                    ) : null}
-                  </select>
-                ) : (
-                  <button
-                    className={cn(
-                      "inline-flex h-8 w-32 shrink-0 items-center truncate rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground sm:w-36",
-                      item.owner && "text-foreground"
-                    )}
-                    disabled={isSaving}
-                    onClick={() => setEditingOwnerPath(item.path)}
-                    type="button"
-                  >
-                    {item.owner || "Unassigned"}
-                  </button>
-                )
-              ) : (
-                <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{item.file.name}</span>
-              )}
-              {checkboxes ? (
-                <button
-                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => onOpenFile(item.path)}
-                  title="Open task"
-                  type="button"
-                >
-                  <HugeiconsIcon icon={FileCodeIcon} strokeWidth={2} className="size-4" />
-                </button>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  )
-}
-
 function ArtifactView({
   content,
   isLoading,
@@ -3726,11 +3322,16 @@ function DrawingNameDialog({
 
 function TaskDialog({
   busy,
+  projects,
+  projectId,
+  onProjectChange,
   open,
   body,
   deadline,
   owner,
-  ownerOptions,
+  users,
+  status,
+  onStatusChange,
   title,
   onBodyChange,
   onDeadlineChange,
@@ -3740,11 +3341,16 @@ function TaskDialog({
   onTitleChange,
 }: {
   busy: boolean
+  projects?: ProjectSummary[]
+  projectId: string
+  onProjectChange: (projectId: string) => void
   open: boolean
   body: string
   deadline: string
   owner: string
-  ownerOptions: string[]
+  users: AuthUser[]
+  status: TaskStatus
+  onStatusChange: (status: TaskStatus) => void
   title: string
   onBodyChange: (value: string) => void
   onDeadlineChange: (value: string) => void
@@ -3753,7 +3359,7 @@ function TaskDialog({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onTitleChange: (value: string) => void
 }) {
-  const canSubmit = !busy && Boolean(title.trim())
+  const canSubmit = !busy && Boolean(title.trim()) && (!projects || projects.some((project) => project.id === projectId))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -3765,6 +3371,12 @@ function TaskDialog({
 
         <form className="grid gap-5" onSubmit={onSubmit}>
           <section className="grid gap-3">
+            {projects ? (
+              <select aria-label="Task project" className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground" value={projectId} disabled={busy} onChange={(event) => onProjectChange(event.target.value)}>
+                <option value="" disabled>Select project</option>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            ) : null}
             <div className="text-sm font-medium text-foreground">Task</div>
             <Input
               name="task-title"
@@ -3772,19 +3384,10 @@ function TaskDialog({
               placeholder="Task title"
               value={title}
             />
-            <select
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-              name="task-owner"
-              onChange={(event) => onOwnerChange(event.target.value)}
-              value={owner}
-            >
-              <option value="">Unassigned</option>
-              {optionsWithCurrent(ownerOptions, owner).map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
+            <div className="flex gap-2">
+              <TaskStatusSelect value={status} disabled={busy} onChange={onStatusChange} />
+              <TaskOwnerSelect value={owner} users={users} disabled={busy} onChange={onOwnerChange} />
+            </div>
             <Input
               aria-label="Task deadline"
               autoComplete="off"
@@ -4132,6 +3735,7 @@ function WorkspaceApp({
   const [selectedTaskPath, setSelectedTaskPath] = useState<string | null>(initialRoute.taskPath)
   const [selectedDocFilePath, setSelectedDocFilePath] = useState<string | null>(initialRoute.docFilePath)
   const [mainView, setMainView] = useState<MainView>(initialRoute.mainView)
+  const lastKanbanProjectId = useRef<string | null>(null)
   const [placeholderTitle, setPlaceholderTitle] = useState(initialRoute.placeholderTitle)
   const [isLoadingOlderActivity, setIsLoadingOlderActivity] = useState(false)
   const [busyAction, setBusyAction] = useState<string | null>(null)
@@ -4159,7 +3763,9 @@ function WorkspaceApp({
   const [markdownStatus, setMarkdownStatus] = useState<MarkdownArtifactEditorStatus | null>(null)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [taskTitle, setTaskTitle] = useState("")
+  const [taskProjectId, setTaskProjectId] = useState("")
   const [taskOwner, setTaskOwner] = useState("")
+  const [taskStatus, setTaskStatus] = useState<TaskStatus>("backlog")
   const [taskDeadline, setTaskDeadline] = useState("")
   const [taskBody, setTaskBody] = useState("")
   const [configName, setConfigName] = useState("")
@@ -4194,6 +3800,11 @@ function WorkspaceApp({
   const usersQuery = useQuery({
     queryKey: ["users"],
     queryFn: listUsers,
+  })
+  const kanbanQuery = useQuery({
+    queryKey: ["all-tasks"],
+    queryFn: listAllTasks,
+    enabled: mainView === "kanban",
   })
   const myTasksQuery = useQuery({
     queryKey: ["my-tasks"],
@@ -4235,7 +3846,7 @@ function WorkspaceApp({
   const projectQuery = useQuery({
     queryKey: ["project", selectedProjectId],
     queryFn: () => getProject(selectedProjectId!, { activityFiles: 2 }),
-    enabled: Boolean(selectedProjectId),
+    enabled: Boolean(selectedProjectId) && mainView !== "kanban",
   })
   const project = projectQuery.data ?? selectedProject
   const currentAuthor = currentUser.name || currentUser.email || "team"
@@ -4309,7 +3920,17 @@ function WorkspaceApp({
   }, [])
 
   useEffect(() => {
-    const needsProject = !["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView)
+    if (mainView !== "kanban") return
+    lastKanbanProjectId.current = selectedProjectId
+    try {
+      localStorage.setItem(KANBAN_PROJECT_FILTER_KEY, selectedProjectId ?? "")
+    } catch (error) {
+      console.warn("Could not save Kanban project filter", error)
+    }
+  }, [mainView, selectedProjectId])
+
+  useEffect(() => {
+    const needsProject = !["document", "agents", "docs", "git", "kanban", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView)
     if (needsProject && !selectedProjectId && projects.length > 0) {
       return
     }
@@ -4347,7 +3968,7 @@ function WorkspaceApp({
   ])
 
   useEffect(() => {
-    if (["document", "agents", "docs", "git", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView)) {
+    if (["document", "agents", "docs", "git", "kanban", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView)) {
       return
     }
 
@@ -4464,6 +4085,8 @@ function WorkspaceApp({
       queryClient.invalidateQueries({ queryKey: ["projects"] }),
       queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
       queryClient.invalidateQueries({ queryKey: ["news"] }),
+      queryClient.invalidateQueries({ queryKey: ["my-tasks"] }),
+      queryClient.invalidateQueries({ queryKey: ["all-tasks"] }),
     ])
   }, [queryClient])
 
@@ -5379,7 +5002,9 @@ function WorkspaceApp({
 
   function resetTaskDialog() {
     setTaskTitle("")
+    setTaskProjectId("")
     setTaskOwner("")
+    setTaskStatus("backlog")
     setTaskDeadline("")
     setTaskBody("")
   }
@@ -5564,14 +5189,16 @@ function WorkspaceApp({
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (!selectedProjectId) {
+    const targetProjectId = mainView === "kanban" ? taskProjectId : selectedProjectId
+    if (!targetProjectId) {
       return
     }
 
     await run("task", async () => {
-      await createTask(selectedProjectId, {
+      await createTask(targetProjectId, {
         title: taskTitle.trim(),
         owner: taskOwner.trim(),
+        status: taskStatus,
         deadline: taskDeadline,
         body: taskBody,
         createdBy: currentAuthor,
@@ -5582,9 +5209,8 @@ function WorkspaceApp({
       setSelectedArtifactPath(null)
       setSelectedTaskPath(null)
       setPlaceholderTitle("")
-      setMainView("tasks")
-      await refresh(selectedProjectId)
-      await queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] })
+      setMainView(mainView === "kanban" ? "kanban" : "tasks")
+      await refresh(targetProjectId)
     })
   }
 
@@ -5602,7 +5228,7 @@ function WorkspaceApp({
   const generated = projectQuery.data?.files.work ?? EMPTY_FILES
   const resourceFolders = projectQuery.data?.folders?.resources ?? []
   const workFolders = projectQuery.data?.folders?.work ?? []
-  const tasks = projectQuery.data?.files.tasks ?? EMPTY_FILES
+  const tasks = projectQuery.data?.files.tasks ?? EMPTY_TASKS
   const logPendingAttachments = useMemo<AgentAttachment[]>(() =>
     logPendingFiles.map((item) => ({
       createdAt: "",
@@ -5847,7 +5473,7 @@ function WorkspaceApp({
       ? markdownStatus
       : null
   const drawingFullscreenActive = selectedArtifactIsExcalidraw && drawingFullscreen
-  const isGlobalView = ["document", "docs", "git", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
+  const isGlobalView = ["document", "docs", "git", "kanban", "my-tasks", "inbox", "news", "readme", "system-log"].includes(mainView) || (mainView === "agents" && !selectedProjectId)
   const isActivityLogView = mainView === "activity" && !selectedArtifact && !selectedTask
   const artifactQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedArtifactPath],
@@ -5861,7 +5487,7 @@ function WorkspaceApp({
   })
   const taskQuery = useQuery({
     queryKey: ["project-file", selectedProjectId, selectedTaskPath],
-    queryFn: () => readFile(selectedProjectId!, selectedTaskPath!),
+    queryFn: () => readTask(selectedProjectId!, selectedTaskPath!),
     enabled: Boolean(
       selectedProjectId &&
         selectedTaskPath &&
@@ -5878,11 +5504,6 @@ function WorkspaceApp({
         selectedGenerated &&
         isTextFile(selectedGenerated.name)
     ),
-  })
-  const taskIndexQuery = useQuery({
-    queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH],
-    queryFn: () => readFile(selectedProjectId!, TASK_INDEX_PATH),
-    enabled: Boolean(selectedProjectId && mainView === "tasks"),
   })
   const docFileQuery = useQuery({
     queryKey: ["docs-file", selectedDocId, selectedDocFilePath],
@@ -5932,16 +5553,15 @@ function WorkspaceApp({
     }
 
     await run("task-delete", async () => {
-      await deleteTask(selectedProjectId, path)
+      const task = taskQuery.data ?? tasks.find((item) => item.path === path)
+      if (!task) return
+      await deleteTask(selectedProjectId, path, task.revision)
       if (selectedTaskPath === path) {
         setSelectedTaskPath(null)
         setSelectedArtifactPath(null)
         setMainView("tasks")
       }
-      await Promise.all([
-        refresh(selectedProjectId),
-        queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] }),
-      ])
+      await refresh(selectedProjectId)
     })
   }
 
@@ -6016,58 +5636,42 @@ function WorkspaceApp({
   }
 
   async function handleSaveMarkdownTask(path: string, content: string) {
-    if (!selectedProjectId) {
-      return content
-    }
-
+    if (!selectedProjectId || !taskQuery.data) return content
     let savedContent = content
-    await run(
-      "task-content",
-      async () => {
-        const saved = await updateTaskContent(selectedProjectId, path, content, currentAuthor)
-        savedContent = saved.content
-        queryClient.setQueryData(["project-file", selectedProjectId, path], saved.content)
-        await Promise.all([
-          refresh(selectedProjectId),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, path] }),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] }),
-        ])
-      },
-      { throwOnError: true }
-    )
-
+    await run("task-content", async () => {
+      const saved = await updateTask(selectedProjectId, path, { content }, taskQuery.data!.revision)
+      savedContent = saved.content
+      queryClient.setQueryData(["project-file", selectedProjectId, path], saved)
+      await refresh(selectedProjectId)
+    }, { throwOnError: true })
     return savedContent
   }
 
-  async function handleSaveTaskIndex(items: FileIndexItem[]) {
-    if (!selectedProjectId) {
-      return
-    }
-
-    await run(
-      "task-index",
-      async () => {
-        const saved = await updateTaskIndex(
-          selectedProjectId,
-          items.map((item) => ({
-            path: item.path,
-            done: Boolean(item.done),
-            title: item.title,
-            owner: item.owner,
-            deadline: item.deadline,
-          }))
-        )
-        queryClient.setQueryData(["project-file", selectedProjectId, TASK_INDEX_PATH], saved.content)
-        await Promise.all([
-          refresh(selectedProjectId),
-          queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId, TASK_INDEX_PATH] }),
-        ])
-      },
-      { throwOnError: true }
-    )
+  async function handleUpdateTask(task: Task & { projectId?: string }, changes: TaskPatch) {
+    const projectId = task.projectId ?? selectedProjectId
+    if (!projectId) return
+    await run("task-fields", async () => {
+      try {
+        const saved = await updateTask(projectId, task.path, changes, task.revision)
+        queryClient.setQueryData(["project-file", projectId, task.path], saved)
+      } finally {
+        await refresh(projectId)
+      }
+    }, { throwOnError: true })
   }
 
-  function handleOpenMyTask(item: MyTask) {
+  async function handleReorderTasks(nextTasks: Task[]) {
+    if (!selectedProjectId) return
+    await run("task-order", async () => {
+      try {
+        await reorderTasks(selectedProjectId, nextTasks)
+      } finally {
+        await Promise.all([refresh(selectedProjectId), queryClient.invalidateQueries({ queryKey: ["project-file", selectedProjectId] })])
+      }
+    }, { throwOnError: true })
+  }
+
+  function handleOpenTask(item: ProjectTask) {
     guardedNavigation(() => {
       setSelectedDocId(null)
       setSelectedProjectId(item.projectId)
@@ -6095,15 +5699,11 @@ function WorkspaceApp({
     })
   }
 
-  async function handleToggleMyTask(item: MyTask, done: boolean) {
+  async function handleMyTaskStatus(item: MyTask, status: TaskStatus) {
     await run("my-task", async () => {
-      const saved = await toggleTask(item.projectId, item.path, done)
-      queryClient.setQueryData(["project-file", item.projectId, TASK_INDEX_PATH], saved.content)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["my-tasks"] }),
-        refresh(item.projectId),
-        queryClient.invalidateQueries({ queryKey: ["project-file", item.projectId, TASK_INDEX_PATH] }),
-      ])
+      const saved = await updateTask(item.projectId, item.path, { status }, item.revision)
+      queryClient.setQueryData(["project-file", item.projectId, item.path], saved)
+      await refresh(item.projectId)
     })
   }
 
@@ -6188,6 +5788,24 @@ function WorkspaceApp({
           onLogout={currentUser.authMode === "none" ? undefined : onLogout}
           onCreateThread={handleCreateProject}
           onDocSelect={handleSelectDoc}
+          onOpenKanban={() => {
+            guardedNavigation(() => {
+              let projectId = lastKanbanProjectId.current
+              try {
+                projectId = localStorage.getItem(KANBAN_PROJECT_FILTER_KEY) || null
+              } catch {
+                // Retain the current session's filter when browser storage is unavailable.
+              }
+              setSelectedProjectId(projectId)
+              setSelectedDocId(null)
+              setSelectedArtifactPath(null)
+              setSelectedGeneratedPath(null)
+              setSelectedTaskPath(null)
+              setSelectedDocFilePath(null)
+              setPlaceholderTitle("")
+              setMainView("kanban")
+            })
+          }}
           onOpenMyTasks={() => {
             guardedNavigation(() => {
               setSelectedDocId(null)
@@ -6313,6 +5931,8 @@ function WorkspaceApp({
                       ? "News"
                     : mainView === "inbox"
                       ? "Inbox"
+                    : mainView === "kanban"
+                      ? "Kanban"
                     : mainView === "my-tasks"
                       ? "My tasks"
                     : mainView === "readme"
@@ -6582,8 +6202,8 @@ function WorkspaceApp({
                       groups={myTaskGroups}
                       isLoading={myTasksQuery.isLoading}
                       isSaving={busyAction === "my-task"}
-                      onOpenItem={handleOpenMyTask}
-                      onToggleItem={(item, done) => void handleToggleMyTask(item, done)}
+                      onOpenItem={handleOpenTask}
+                      onStatusChange={(item, status) => void handleMyTaskStatus(item, status)}
                     />
                   ) : mainView === "inbox" ? (
                     <InboxView
@@ -6652,41 +6272,53 @@ function WorkspaceApp({
                         })
                       }}
                     />
+                  ) : mainView === "kanban" ? (
+                    kanbanQuery.isError || projectsQuery.isError ? (
+                      <div role="alert" className="text-sm text-destructive">{kanbanQuery.error?.message ?? projectsQuery.error?.message}</div>
+                    ) : (
+                      <KanbanBoard
+                        tasks={kanbanQuery.data?.items ?? EMPTY_PROJECT_TASKS}
+                        projects={projects}
+                        projectId={selectedProjectId}
+                        users={usersQuery.data?.users ?? [currentUser]}
+                        busy={Boolean(busyAction)}
+                        isLoading={kanbanQuery.isLoading || projectsQuery.isLoading}
+                        onProjectChange={setSelectedProjectId}
+                        onAdd={() => guardedNavigation(() => {
+                          setTaskProjectId(projects.find((project) => project.id === selectedProjectId)?.id ?? projects[0]?.id ?? "")
+                          setTaskDialogOpen(true)
+                        })}
+                        onOpenList={() => guardedNavigation(() => setMainView("tasks"))}
+                        onOpen={handleOpenTask}
+                        onUpdate={handleUpdateTask}
+                      />
+                    )
                   ) : mainView === "tasks" ? (
-                    <FileIndexView
-                      checkboxes
-                      addLabel="Add task"
-                      content={taskIndexQuery.data}
-                      emptyLabel="No tasks"
-                      files={tasks}
-                      indexPath={TASK_INDEX_PATH}
-                      isLoading={taskIndexQuery.isLoading}
-                      isSaving={busyAction === "task-index"}
-                      ownerOptions={ownerOptions}
-                      title="Tasks"
+                    <ProjectTasksView
+                      tasks={tasks}
+                      users={usersQuery.data?.users ?? [currentUser]}
+                      busy={Boolean(busyAction)}
                       onAdd={() => guardedNavigation(() => setTaskDialogOpen(true))}
-                      onOpenFile={(path) => {
-                        guardedNavigation(() => {
-                          setSelectedArtifactPath(null)
-                          setSelectedGeneratedPath(null)
-                          setSelectedTaskPath(path)
-                          setPlaceholderTitle("")
-                          setMainView("task")
-                        })
-                      }}
-                      onSaveItems={handleSaveTaskIndex}
+                      onOpen={(path) => handleOpenProjectFileLink(path)}
+                      onUpdate={handleUpdateTask}
+                      onReorder={handleReorderTasks}
                     />
                   ) : mainView === "task" && selectedTask ? (
                     isMarkdownFile(selectedTask.name) ? (
                       taskQuery.isLoading ? (
                         <TextFileView
-                          content={taskQuery.data}
+                          content={undefined}
                           isLoading={taskQuery.isLoading}
                         />
                       ) : (
+                        <div>
+                          <div className="mx-auto mb-4 flex max-w-3xl flex-wrap gap-2">
+                            <TaskStatusSelect value={taskQuery.data?.status ?? selectedTask.status} disabled={Boolean(busyAction) || markdownStatus?.dirty} onChange={(status) => { void handleUpdateTask(taskQuery.data ?? selectedTask, { status }).catch(() => {}) }} />
+                            <TaskOwnerSelect value={taskQuery.data?.owner ?? selectedTask.owner ?? ""} users={usersQuery.data?.users ?? [currentUser]} disabled={Boolean(busyAction) || markdownStatus?.dirty} onChange={(owner) => { void handleUpdateTask(taskQuery.data ?? selectedTask, { owner }).catch(() => {}) }} />
+                          </div>
                         <MarkdownArtifactEditor
                           key={selectedTask.path}
-                          content={taskQuery.data}
+                          content={taskQuery.data?.content}
                           isLoading={false}
                           isSaving={busyAction === "task-content"}
                           commandFiles={markdownCommandFiles}
@@ -6701,10 +6333,11 @@ function WorkspaceApp({
                           onStatusChange={handleMarkdownStatusChange}
                           resolveUrl={resolveMarkdownAssetUrl}
                         />
+                        </div>
                       )
                     ) : isTextFile(selectedTask.name) ? (
                       <TextFileView
-                        content={taskQuery.data}
+                        content={taskQuery.data?.content}
                         isLoading={taskQuery.isLoading}
                       />
                     ) : (
@@ -6998,7 +6631,7 @@ function WorkspaceApp({
                   files={docFiles}
                   onOpenFile={(path) => setSelectedDocFilePath(path)}
                 />
-	              ) : isGlobalView ? null : (
+                ) : isGlobalView || mainView === "kanban" ? null : (
 	                <ProjectRail
 	                  activePath={selectedArtifactPath}
                     activeGeneratedPath={selectedGeneratedPath}
@@ -7174,11 +6807,16 @@ function WorkspaceApp({
         />
         <TaskDialog
           busy={busyAction === "task"}
+          projects={mainView === "kanban" ? projects : undefined}
+          projectId={taskProjectId}
+          onProjectChange={setTaskProjectId}
           body={taskBody}
           deadline={taskDeadline}
           open={taskDialogOpen}
           owner={taskOwner}
-          ownerOptions={ownerOptions}
+          users={usersQuery.data?.users ?? [currentUser]}
+          status={taskStatus}
+          onStatusChange={setTaskStatus}
           title={taskTitle}
           onBodyChange={setTaskBody}
           onDeadlineChange={setTaskDeadline}

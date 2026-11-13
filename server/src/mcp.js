@@ -1,6 +1,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createDevsyncMcpServer } from "./mcp-server.js"
 import { documentIndex, ensureDataDir } from "./storage.js"
+import "./automation-triggers.js"
 
 await ensureDataDir()
 await documentIndex.reconcile()

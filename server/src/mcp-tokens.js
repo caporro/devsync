@@ -6,6 +6,14 @@ import { dataRootDir, vaultName } from "./storage.js"
 const TOKEN_DIR = path.join(dataRootDir, "auth", vaultName)
 const TOKEN_FILE = path.join(TOKEN_DIR, "mcp-tokens.json")
 const TOKEN_PREFIX = "devsync_mcp"
+let storeQueue = Promise.resolve()
+
+// Authentication updates lastUsedAt in the same store as token creation/revocation.
+function withStoreLock(operation) {
+  const pending = storeQueue.then(operation)
+  storeQueue = pending.catch(() => {})
+  return pending
+}
 
 function nowIso() {
   return new Date().toISOString()
@@ -64,7 +72,7 @@ export async function listMcpTokensForUser(user) {
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
 
-export async function createMcpTokenForUser(user, input = {}) {
+async function createMcpTokenUnlocked(user, input = {}) {
   const email = String(user?.email ?? user?.username ?? "").trim().toLowerCase()
   const userName = String(user?.name ?? email).trim() || email
 
@@ -98,7 +106,7 @@ export async function createMcpTokenForUser(user, input = {}) {
   }
 }
 
-export async function deleteMcpTokenForUser(user, tokenId) {
+async function deleteMcpTokenUnlocked(user, tokenId) {
   const email = String(user?.email ?? user?.username ?? "").trim().toLowerCase()
   const store = await readStore()
   const before = store.tokens.length
@@ -114,7 +122,7 @@ export async function deleteMcpTokenForUser(user, tokenId) {
   return { ok: true }
 }
 
-export async function verifyMcpToken(token) {
+async function verifyMcpTokenUnlocked(token) {
   const value = String(token ?? "").trim()
 
   if (!value.startsWith(`${TOKEN_PREFIX}_`)) {
@@ -138,4 +146,16 @@ export async function verifyMcpToken(token) {
     name: item.userName,
     authMode: "mcp-token",
   }
+}
+
+export function createMcpTokenForUser(user, input = {}) {
+  return withStoreLock(() => createMcpTokenUnlocked(user, input))
+}
+
+export function deleteMcpTokenForUser(user, tokenId) {
+  return withStoreLock(() => deleteMcpTokenUnlocked(user, tokenId))
+}
+
+export function verifyMcpToken(token) {
+  return withStoreLock(() => verifyMcpTokenUnlocked(token))
 }

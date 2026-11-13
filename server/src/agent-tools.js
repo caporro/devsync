@@ -13,6 +13,8 @@ import {
   ensureProjectDirs,
   listTasks,
   readTask,
+  reorderTasks,
+  TASK_STATUSES,
   slugify,
   toggleTask,
   updateTask,
@@ -296,11 +298,10 @@ function createAppendActivityLogTool(scope) {
   )
 }
 
-function canWriteTasks(scope, options = {}) {
+function canWriteTasks(scope) {
   return (scope.write ?? []).some((item) => {
     const clean = cleanVirtualPath(item)
     return ["**", "**/*", "tasks", "tasks/**", "tasks/*"].includes(clean)
-      || (!options.files && clean === "tasks/README.md")
   })
 }
 
@@ -310,19 +311,19 @@ function assertTaskScope(scope, operation) {
   }
 }
 
-function assertTaskWrite(scope, operation) {
+function assertTaskWrite(scope, operation, targetPath) {
   assertTaskScope(scope, operation)
-
-  if (!canWriteTasks(scope, { files: true })) {
+  if (targetPath) return assertWritePath(scope, operation, targetPath)
+  if (!canWriteTasks(scope)) {
     throw new Error(`${operation} requires write permission for tasks/**.`)
   }
 }
 
-function assertTaskIndexWrite(scope, operation) {
-  assertTaskScope(scope, operation)
-
-  if (!canWriteTasks(scope)) {
-    throw new Error(`${operation} requires write permission for tasks/README.md or tasks/**.`)
+function taskAttribution(scope) {
+  return {
+    author: scope.actor ?? "assistant",
+    createdBy: scope.actor ?? "assistant",
+    source: scope.source ?? "assistant"
   }
 }
 
@@ -330,12 +331,12 @@ function createListTasksTool(scope) {
   return tool(
     async () => {
       assertTaskScope(scope, "list_tasks")
-      return listTasks(scope.projectId)
+      return (await listTasks(scope.projectId)).filter((task) => canReadTask(scope, task.path))
     },
     {
       name: "list_tasks",
       description: "List high-level project tasks.",
-      schema: z.object({}),
+      schema: z.object({})
     }
   )
 }
@@ -344,88 +345,116 @@ function createReadTaskTool(scope) {
   return tool(
     async ({ path: itemPath }) => {
       assertTaskScope(scope, "read_task")
+      if (!canReadTask(scope, itemPath)) throw new Error("read_task requires read permission for the task file.")
       return readTask(scope.projectId, itemPath)
     },
     {
       name: "read_task",
       description: "Read a project task from tasks/.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative task path."),
-      }),
+        path: z.string().min(1).describe("Project-relative task path.")
+      })
     }
   )
 }
 
+function canReadTask(scope, itemPath) {
+  const normalized = cleanVirtualPath(itemPath)
+  return (scope.read ?? []).some((pattern) => path.matchesGlob(normalized, cleanVirtualPath(pattern)))
+}
+
 function createCreateTaskTool(scope) {
   return tool(
-    async ({ title, owner, deadline, body, createdBy }) => {
+    async (input) => {
       assertTaskWrite(scope, "create_task")
-      return createTask(scope.projectId, { title, owner, deadline, body, createdBy: createdBy || "agent" })
+      return createTask(scope.projectId, { ...input, ...taskAttribution(scope) })
     },
     {
       name: "create_task",
-      description: "Create a high-level project task in tasks/.",
+      description: "Create a Markdown task. Default status is backlog; assignment never starts execution.",
       schema: z.object({
-        title: z.string().min(1).describe("Task title."),
-        owner: z.string().optional().describe("Optional owner label."),
-        deadline: z.string().optional().describe("Optional deadline as YYYY-MM-DD."),
-        body: z.string().optional().describe("Optional Markdown body."),
-        createdBy: z.string().optional().describe("Creator label. Defaults to agent."),
-      }),
+        title: z.string().min(1),
+        status: z.enum(TASK_STATUSES).optional(),
+        owner: z.string().optional(),
+        deadline: z.string().optional(),
+        body: z.string().optional()
+      })
     }
   )
 }
 
 function createUpdateTaskTool(scope) {
   return tool(
-    async ({ path: itemPath, title, owner, deadline, body, content }) => {
-      assertTaskWrite(scope, "update_task")
-      return updateTask(scope.projectId, itemPath, { title, owner, deadline, body, content })
+    async ({ path: itemPath, ...input }) => {
+      assertTaskWrite(scope, "update_task", itemPath)
+      return updateTask(scope.projectId, itemPath, { ...input, ...taskAttribution(scope) })
     },
     {
       name: "update_task",
-      description: "Update a project task in tasks/.",
+      description:
+        "Update a task. First read_task and pass its revision as expectedRevision; stale writes are rejected.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative task path."),
-        title: z.string().optional().describe("New title."),
-        owner: z.string().optional().describe("New owner label."),
-        deadline: z.string().optional().describe("New deadline as YYYY-MM-DD."),
-        body: z.string().optional().describe("New Markdown body."),
-        content: z.string().optional().describe("Full Markdown content."),
-      }),
+        path: z.string().min(1),
+        expectedRevision: z.string().regex(/^[0-9a-f]{64}$/),
+        title: z.string().optional(),
+        status: z.enum(TASK_STATUSES).optional(),
+        owner: z.string().optional(),
+        deadline: z.string().optional(),
+        body: z.string().optional(),
+        content: z.string().optional()
+      })
     }
   )
 }
 
 function createToggleTaskTool(scope) {
   return tool(
-    async ({ path: itemPath, done }) => {
-      assertTaskIndexWrite(scope, "toggle_task")
-      return toggleTask(scope.projectId, itemPath, done)
+    async ({ path: itemPath, done, expectedRevision }) => {
+      assertTaskWrite(scope, "toggle_task", itemPath)
+      return toggleTask(scope.projectId, itemPath, done, { ...taskAttribution(scope), expectedRevision })
     },
     {
       name: "toggle_task",
-      description: "Toggle or set a task checkbox in tasks/README.md only.",
+      description: "Compatibility: mark done or reopen as todo. Prefer update_task with an explicit status.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative task path."),
-        done: z.boolean().optional().describe("Optional explicit checkbox value."),
-      }),
+        path: z.string().min(1),
+        done: z.boolean().optional(),
+        expectedRevision: z.string().regex(/^[0-9a-f]{64}$/)
+      })
+    }
+  )
+}
+
+function createReorderTasksTool(scope) {
+  return tool(
+    async (input) => {
+      assertTaskWrite(scope, "reorder_tasks")
+      for (const item of input.items) assertTaskWrite(scope, "reorder_tasks", item.path)
+      return reorderTasks(scope.projectId, { ...input, ...taskAttribution(scope) })
+    },
+    {
+      name: "reorder_tasks",
+      description: "Set the complete task order, passing each current path and revision from list_tasks.",
+      schema: z.object({
+        items: z.array(z.object({ path: z.string().min(1), expectedRevision: z.string().regex(/^[0-9a-f]{64}$/) }))
+      })
     }
   )
 }
 
 function createDeleteTaskTool(scope) {
   return tool(
-    async ({ path: itemPath }) => {
-      assertTaskWrite(scope, "delete_task")
-      return deleteTask(scope.projectId, itemPath)
+    async ({ path: itemPath, expectedRevision }) => {
+      assertTaskWrite(scope, "delete_task", itemPath)
+      return deleteTask(scope.projectId, itemPath, { ...taskAttribution(scope), expectedRevision })
     },
     {
       name: "delete_task",
-      description: "Delete a project task from tasks/.",
+      description: "Permanently delete a task only when explicitly requested. Requires its current revision.",
       schema: z.object({
-        path: z.string().min(1).describe("Project-relative task path."),
-      }),
+        path: z.string().min(1),
+        expectedRevision: z.string().regex(/^[0-9a-f]{64}$/)
+      })
     }
   )
 }
@@ -489,6 +518,7 @@ export function resolveAgentTools(toolNames, scope) {
     update_task: () => createUpdateTaskTool(scope),
     toggle_task: () => createToggleTaskTool(scope),
     delete_task: () => createDeleteTaskTool(scope),
+    reorder_tasks: () => createReorderTasksTool(scope),
   }
 
   return toolNames.filter((name) => name !== "filesystem").map((name) => {

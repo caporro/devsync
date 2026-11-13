@@ -1,6 +1,11 @@
 import { getAutomationDefinition, listAutomationDefinitions } from "./automation-definitions.js"
 import { runAutomation } from "./automation-runtime.js"
 import { listProjects } from "./storage.js"
+import { taskEvents } from "./task-events.js"
+
+taskEvents.on("event", (event) => {
+  return emitAutomationEvent(event).catch((error) => console.error("Task automation event failed:", error.message))
+})
 
 const runningKeys = new Set()
 const lastScheduleRuns = new Map()
