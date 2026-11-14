@@ -15,7 +15,7 @@ function jsonResult(value) {
 
 export function createDevsyncMcpServer({ user, baseUrl = process.env.DEVSYNC_PUBLIC_URL ?? "" } = {}) {
   if (baseUrl && !["http:", "https:"].includes(new URL(baseUrl).protocol)) throw new Error("DEVSYNC_PUBLIC_URL must use HTTP or HTTPS")
-  const server = new McpServer({ name: "devsync", version: "0.1.29" })
+  const server = new McpServer({ name: "devsync", version: "0.1.30" })
   const projectId = z.string().min(1).describe("Project folder ID returned by list_projects.")
   const filePath = z.string().min(1).describe("Path relative to the project or docs folder, including its area, e.g. resources/analysis.md.")
   const ref = z.string().min(1).describe("Five-character document ID, shared HTTP /d/ID URL, or devsync://document/ID reference.")

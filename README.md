@@ -196,7 +196,7 @@ docker run -d \
   -e AUTH_SESSION_SECRET='change-me-to-a-long-random-string-at-least-32-chars' \
   -e AUTH_COOKIE_SECURE=true \
   -e OPENAI_API_KEY='sk-...' \
-  caporro/devsync:0.1.29
+  caporro/devsync:0.1.30
 ```
 
 Notes:
@@ -216,7 +216,7 @@ docker compose up -d
 
 The GitHub workflow runs syntax checks, backend/frontend tests, lint, build, and dependency audits on pushes and pull requests. It then builds and tests the production AMD64 image without network access, and builds both `linux/amd64` and `linux/arm64` with Buildx. Node 24.22.1 is pinned in CI and both Docker stages, and builds pull fresh base images.
 
-Publishing is limited to `v*` tags in `caporro/devsync`, after all checks pass. The tag must exactly match the version in both `package.json` files, for example `v0.1.29`. A stable release publishes `caporro/devsync:0.1.29`, `latest`, and a commit SHA tag, with SBOM and provenance attestations. Branches and pull requests never publish images.
+Publishing is limited to `v*` tags in `caporro/devsync`, after all checks pass. The tag must exactly match the version in both `package.json` files, for example `v0.1.30`. A stable release publishes `caporro/devsync:0.1.30`, `latest`, and a commit SHA tag, with SBOM and provenance attestations. Branches and pull requests never publish images.
 
 Configure these GitHub Actions repository settings before publishing:
 
@@ -556,7 +556,7 @@ Use `append_log` for project diaries and updates; long entries become linked Mar
 
 `append_task_comment` adds a dated, attributed reply in the same task Markdown, without requiring a client revision. REST and the task UI expose the same operation. Existing comments are preserved through description/metadata edits and cannot be changed through those APIs. The UI displays the discussion separately from the description editor. See [task comments](docs/reference/tasks.md#comments).
 
-See the [0.1.29 release notes](docs/releases/0.1.29.md) for comments, tags, MCP project creation and audit filters, and the [update for Marco](docs/releases/0.1.29-per-marco.md) for examples and the scope agreed after his proposals. The [0.1.28 upgrade notes](docs/releases/0.1.28.md) cover legacy migration and recovery of old truncated filenames.
+See the [0.1.30 release notes](docs/releases/0.1.30.md) for the timestamp-recognition fix in historical filename recovery, the [0.1.29 release notes](docs/releases/0.1.29.md) for comments, tags, MCP project creation and audit filters, and the [update for Marco](docs/releases/0.1.29-per-marco.md) for examples and the scope agreed after his proposals. The [0.1.28 upgrade notes](docs/releases/0.1.28.md) cover legacy migration and recovery of old truncated filenames.
 
 Planning/Gantt has been removed. Tasks, My Tasks and task tools remain available. Existing `vault-plan.json` and `gantt.json` files are preserved unchanged and are no longer read or updated.
 
